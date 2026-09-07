@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <title>Agentic Resume Tailoring + Outreach System</title>
+  <style>
+    body { width: 360px; font-family: -apple-system, sans-serif; padding: 12px; }
+    h3 { margin: 0 0 10px; font-size: 15px; }
+    input { width: 100%; box-sizing: border-box; padding: 6px; margin-bottom: 6px; }
+    button { width: 100%; padding: 8px; margin-top: 4px; cursor: pointer; }
+    #status { margin-top: 10px; font-size: 13px; color: #444; white-space: pre-wrap; }
+    .hidden { display: none; }
+    .google-btn { width: 100%; padding: 8px; margin-top: 8px; background: #4285f4; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    .google-btn:hover { background: #357ae0; }
+    .user-info { font-size: 12px; color: #666; margin-bottom: 8px; }
+    .warning { font-size: 12px; color: #c00; margin-bottom: 8px; padding: 6px; background: #fff3f3; border-radius: 4px; }
+    .result-box { background: #f8f8f8; border: 1px solid #ddd; border-radius: 6px; padding: 10px; margin: 8px 0; font-size: 12px; white-space: pre-wrap; max-height: 200px; overflow-y: auto; }
+    .action-btns { display: flex; gap: 6px; margin-top: 8px; }
+    .action-btns button { flex: 1; padding: 6px; font-size: 12px; border-radius: 4px; border: 1px solid #ccc; cursor: pointer; }
+    .btn-download { background: #4CAF50; color: white; border: none; }
+    .btn-approve { background: #2196F3; color: white; border: none; }
+    .btn-send { background: #ff9800; color: white; border: none; }
+    .btn-back { background: #eee; border: none; font-size: 12px; }
+    .history-item { border: 1px solid #ddd; border-radius: 4px; padding: 8px; margin-bottom: 6px; font-size: 12px; cursor: pointer; }
+    .history-item:hover { background: #f0f0f0; }
+    .status-badge { display: inline-block; padding: 2px 6px; border-radius: 3px; font-size: 11px; font-weight: bold; }
+    .status-ready { background: #e8f5e9; color: #2e7d32; }
+    .status-approved { background: #e3f2fd; color: #1565c0; }
+    .status-sent { background: #f3e5f5; color: #7b1fa2; }
+    .status-failed { background: #ffebee; color: #c62828; }
+    .status-pending, .status-processing { background: #fff8e1; color: #f9a825; }
+  </style>
+</head>
+<body>
+  <h3>Resume Tailor</h3>
+
+  <div id="loginView">
+    <input id="email" type="email" placeholder="Email" />
+    <input id="password" type="password" placeholder="Password" />
+    <button id="loginBtn">Log in with password</button>
+    <button id="googleLoginBtn" class="google-btn">Log in with Google</button>
+  </div>
+
+  <div id="mainView" class="hidden">
+    <div id="userEmail" class="user-info"></div>
+    <div id="resumeWarning" class="warning hidden">
+      No resume uploaded. Upload one in the web app first.
+    </div>
+
+    <div id="profileSection" class="hidden">
+      <input id="pfFullName" type="text" placeholder="Full name" />
+      <input id="pfPhone" type="text" placeholder="Phone" />
+      <input id="pfLocation" type="text" placeholder="Location (City, Country)" />
+      <input id="pfLinkedin" type="text" placeholder="LinkedIn URL" />
+      <input id="pfGithub" type="text" placeholder="GitHub URL" />
+      <input id="pfSmtpUser" type="text" placeholder="Gmail to send from" />
+      <input id="pfSmtpPass" type="password" placeholder="Gmail App Password (optional)" />
+      <button id="connectGmailBtn" class="btn-approve">Connect Gmail (no password)</button>
+      <div id="gmailStatus" style="font-size:11px;color:#666;"></div>
+      <button id="profileSaveBtn" class="btn-approve">Save profile</button>
+    </div>
+
+    <div id="tailorView">
+      <button id="profileBtn" style="background:#eee;border:none;font-size:12px;">Edit profile</button>
+      <button id="tailorBtn">Tailor resume for this post</button>
+      <button id="historyBtn" style="background:#eee;border:none;font-size:12px;">View past results</button>
+    </div>
+
+    <div id="resultView" class="hidden">
+      <div id="resultStatus"></div>
+      <div id="resultMessage" class="result-box"></div>
+      <div class="action-btns">
+        <button id="downloadBtn" class="btn-download">Download PDF</button>
+        <button id="approveBtn" class="btn-approve">Approve</button>
+        <button id="sendBtn" class="btn-send">Send</button>
+      </div>
+      <button id="backBtn" class="btn-back" style="margin-top:8px;">Back</button>
+    </div>
+
+    <div id="historyView" class="hidden">
+      <div id="historyList"></div>
+      <button id="historyBackBtn" class="btn-back" style="margin-top:8px;">Back</button>
+    </div>
+
+    <button id="logoutBtn" style="margin-top:6px;background:#eee;border:none;padding:6px;font-size:12px;cursor:pointer;">Log out</button>
+  </div>
+
+  <div id="status"></div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

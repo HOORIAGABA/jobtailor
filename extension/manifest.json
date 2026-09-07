@@ -1,0 +1,22 @@
+{
+  "manifest_version": 3,
+  "name": "Agentic Resume Tailoring + Outreach System",
+  "version": "1.0.0",
+  "description": "Capture a LinkedIn hiring post you're viewing and tailor your resume for it.",
+  "permissions": ["activeTab", "storage", "scripting", "identity", "downloads"],
+  "host_permissions": ["https://www.linkedin.com/*", "http://127.0.0.1:8000/*", "http://localhost:8000/*"],
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Agentic Resume Tailoring + Outreach System"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.linkedin.com/*"],
+      "js": ["content_script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  }
+}

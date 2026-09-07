@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+
+# Virtualenv
+venv/
+.venv/
+
+# Environment / secrets
+.env
+.env.local
+.env*.local
+
+# Runtime data (SQLite, Chroma, generated resumes)
+backend/data/
+data/
+*.db
+*.db-wal
+*.db-shm
+
+# Node
+node_modules/
+.next/
+out/
+
+# Logs
+*.log
+backend/logs/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Test artifacts
+.tmp/
+
+# Build artifacts
+*.tsbuildinfo
+next-env.d.ts

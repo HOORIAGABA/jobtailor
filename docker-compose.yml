@@ -1,0 +1,27 @@
+services:
+  backend:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend/data:/app/data
+    env_file:
+      - ./backend/.env
+    # For local dev this uses SQLite (no separate DB container needed —
+    # zero cost, zero extra setup). To use Postgres instead, uncomment
+    # the block below and set DATABASE_URL in backend/.env accordingly,
+    # e.g. postgresql://jobtailor:jobtailor@db:5432/jobtailor
+
+  # db:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_USER: jobtailor
+  #     POSTGRES_PASSWORD: jobtailor
+  #     POSTGRES_DB: jobtailor
+  #   ports:
+  #     - "5432:5432"
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+
+# volumes:
+#   pgdata:

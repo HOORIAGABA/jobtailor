@@ -1,0 +1,341 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8" />
+<title>Agentic Resume Tailoring + Outreach System</title>
+<style>
+  body { font-family: -apple-system, sans-serif; max-width: 720px; margin: 40px auto; padding: 0 16px; color: #222; }
+  h1 { font-size: 22px; }
+  section { border: 1px solid #ddd; border-radius: 8px; padding: 16px; margin-bottom: 16px; }
+  input, textarea { width: 100%; box-sizing: border-box; padding: 8px; margin: 4px 0 10px; font-family: inherit; }
+  textarea { min-height: 100px; }
+  button { padding: 8px 14px; cursor: pointer; }
+  pre { background: #f6f6f6; padding: 10px; border-radius: 6px; overflow-x: auto; white-space: pre-wrap; }
+  .row { display: flex; gap: 8px; }
+  .row > * { flex: 1; }
+  label { font-size: 13px; color: #555; }
+</style>
+</head>
+<body>
+
+<h1>Agentic Resume Tailoring + Outreach System</h1>
+<p style="color:#666; font-size: 14px;">
+  Minimal test UI for the backend at <code id="apiBaseDisplay"></code>.
+  Not a production frontend — just enough to exercise every endpoint.
+</p>
+
+<section>
+  <h3>1. Account</h3>
+  <div class="row">
+    <div>
+      <label>Email</label>
+      <input id="email" type="email" value="demo@example.com" />
+    </div>
+    <div>
+      <label>Password</label>
+      <input id="password" type="password" value="demopass123" />
+    </div>
+  </div>
+  <button id="registerBtn">Register</button>
+  <button id="loginBtn">Log in</button>
+  <button id="googleLoginBtn">Log in with Google</button>
+  <div>Status: <span id="authStatus">not logged in</span></div>
+</section>
+
+<section>
+  <h3>1.5 Profile (used on the resume header + for sending)</h3>
+  <div class="row">
+    <div><label>Full name</label><input id="pfFullName" /></div>
+    <div><label>Phone</label><input id="pfPhone" /></div>
+  </div>
+  <div class="row">
+    <div><label>Location</label><input id="pfLocation" /></div>
+    <div><label>LinkedIn</label><input id="pfLinkedin" /></div>
+  </div>
+  <div class="row">
+    <div><label>Gmail to send from</label><input id="pfSmtpUser" /></div>
+    <div><label>Gmail App Password (write-only, optional)</label><input id="pfSmtpPass" type="password" /></div>
+  </div>
+  <button id="profileSaveBtn">Save profile</button>
+  <button id="connectGmailBtn" style="background:#4285f4;color:#fff;border:none;">Connect Gmail (no password needed)</button>
+  <span id="gmailStatus" style="font-size:13px;color:#666;"></span>
+  <span id="profileStatus" style="font-size:13px;color:#666;"></span>
+</section>
+
+<section>
+  <h3>2. Upload baseline resume</h3>
+  <input id="resumeFile" type="file" accept=".pdf,.docx" />
+  <button id="uploadBtn">Upload & Parse</button>
+  <pre id="resumeResult"></pre>
+</section>
+
+<section>
+  <h3>3. Submit a job post</h3>
+  <label>Paste job post text (or a URL below)</label>
+  <textarea id="jobText" placeholder="Paste the job posting text here..."></textarea>
+  <label>Or a URL (non-LinkedIn links will be auto-fetched)</label>
+  <input id="jobUrl" placeholder="https://example.com/careers/backend-engineer" />
+  <button id="submitJobBtn">Tailor Resume</button>
+  <pre id="jobResult"></pre>
+</section>
+
+<section>
+  <h3>4. Result</h3>
+  <div id="pipelineStatus" style="font-size:13px;color:#666;"></div>
+  <button id="downloadBtn">Download tailored resume (PDF)</button>
+  <button id="approveBtn">Approve</button>
+  <button id="sendBtn">Send email</button>
+  <pre id="finalResult"></pre>
+</section>
+
+<script>
+const API_BASE = "http://127.0.0.1:8000";
+document.getElementById("apiBaseDisplay").textContent = API_BASE;
+
+let token = null;
+let resumeId = null;
+let outputId = null;
+let outputStatus = null;
+
+function setAuthStatus(text) { document.getElementById("authStatus").textContent = text; }
+function setPipelineStatus(text) { document.getElementById("pipelineStatus").textContent = text; }
+
+const PROCESSING = new Set(["pending", "processing"]);
+
+async function pollOutput(id) {
+  // Poll GET /tailored-outputs/{id} until the background pipeline finishes.
+  for (let attempt = 0; attempt < 300; attempt++) {
+    const data = await api(`/tailored-outputs/${id}`);
+    outputStatus = data.status;
+    setPipelineStatus(`Tailoring… (${data.status}${data.error ? " — " + data.error : ""})`);
+    document.getElementById("finalResult").textContent = JSON.stringify(data, null, 2);
+    if (!PROCESSING.has(data.status)) return data;
+    await new Promise(r => setTimeout(r, 8000));
+  }
+  setPipelineStatus("Timed out waiting for the pipeline. Check the server log.");
+}
+
+async function api(path, options = {}) {
+  const headers = options.headers || {};
+  if (token) headers["Authorization"] = `Bearer ${token}`;
+  const resp = await fetch(`${API_BASE}${path}`, { ...options, headers });
+  if (!resp.ok) {
+    const err = await resp.json().catch(() => ({ detail: resp.statusText }));
+    throw new Error(err.detail || "Request failed");
+  }
+  return resp.json();
+}
+
+document.getElementById("registerBtn").onclick = async () => {
+  try {
+    const email = document.getElementById("email").value;
+    const password = document.getElementById("password").value;
+    const data = await api("/auth/register", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    token = data.access_token;
+    setAuthStatus("registered & logged in");
+    loadProfile();
+  } catch (e) {
+    if (e.message === "Email already registered") {
+      setAuthStatus("Email already registered. Click 'Log in' instead.");
+    } else {
+      setAuthStatus(`error: ${e.message}`);
+    }
+  }
+};
+
+document.getElementById("loginBtn").onclick = async () => {
+  try {
+    const email = document.getElementById("email").value;
+    const password = document.getElementById("password").value;
+    const data = await api("/auth/login", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    });
+    token = data.access_token;
+    setAuthStatus("logged in");
+    loadProfile();
+  } catch (e) { setAuthStatus(`error: ${e.message}`); }
+};
+
+document.getElementById("googleLoginBtn").onclick = async () => {
+  try {
+    const redirectUri = `http://127.0.0.1:8000/auth/google/callback`;
+    const authDataResp = await fetch(`${API_BASE}/auth/google/login?state=frontend&redirect_uri=${encodeURIComponent(redirectUri)}`);
+    if (!authDataResp.ok) throw new Error(`Failed to start Google login (${authDataResp.status})`);
+    const authData = await authDataResp.json();
+    const url = authData.auth_url;
+    const popup = window.open(url, "google-login", "width=500,height=700");
+    setAuthStatus("Waiting for Google login...");
+
+    window.addEventListener("message", function onMessage(event) {
+      if (event.data && event.data.type === "google_oauth" && event.data.token) {
+        token = event.data.token;
+        setAuthStatus("logged in with Google");
+        window.removeEventListener("message", onMessage);
+        if (popup && !popup.closed) popup.close();
+        loadProfile();
+      }
+    });
+  } catch (e) {
+    setAuthStatus(`error: ${e.message}`);
+  }
+};
+
+async function loadProfile() {
+  if (!token) return;
+  try {
+    const user = await api("/auth/me");
+    document.getElementById("pfFullName").value = user.full_name || "";
+    document.getElementById("pfPhone").value = user.phone || "";
+    document.getElementById("pfLocation").value = user.location || "";
+    document.getElementById("pfLinkedin").value = user.linkedin || "";
+    document.getElementById("pfSmtpUser").value = user.smtp_username || "";
+    document.getElementById("pfSmtpPass").value = "";
+    setAuthStatus(user.full_name ? `logged in as ${user.full_name}` : "logged in");
+  } catch (e) { /* not fatal */ }
+  refreshGmailStatus();
+}
+
+document.getElementById("profileSaveBtn").onclick = async () => {
+  if (!token) { alert("Log in first"); return; }
+  const profile = {
+    full_name: document.getElementById("pfFullName").value,
+    phone: document.getElementById("pfPhone").value,
+    location: document.getElementById("pfLocation").value,
+    linkedin: document.getElementById("pfLinkedin").value,
+    smtp_username: document.getElementById("pfSmtpUser").value,
+    smtp_app_password: document.getElementById("pfSmtpPass").value,
+  };
+  try {
+    const res = await api("/auth/me", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profile),
+    });
+    document.getElementById("pfSmtpPass").value = "";
+    document.getElementById("profileStatus").textContent = "Profile saved.";
+    setAuthStatus(res.full_name ? `logged in as ${res.full_name}` : "logged in");
+  } catch (e) {
+    document.getElementById("profileStatus").textContent = `Error: ${e.message}`;
+  }
+};
+
+async function refreshGmailStatus() {
+  if (!token) return;
+  try {
+    const st = await api("/auth/gmail/status");
+    const g = document.getElementById("gmailStatus");
+    g.textContent = st.connected
+      ? `Gmail connected (${st.email}) — sending needs no password.`
+      : "Gmail not connected yet. Click 'Connect Gmail' to enable password-free sending.";
+  } catch (e) { /* not fatal */ }
+}
+
+document.getElementById("connectGmailBtn").onclick = async () => {
+  if (!token) { alert("Log in first"); return; }
+  document.getElementById("gmailStatus").textContent = "Opening Google consent…";
+  try {
+    const authData = await api(`/auth/gmail/connect`);
+    if (!authData.auth_url) throw new Error("No Gmail auth URL returned");
+    const sep = authData.auth_url.includes("?") ? "&" : "?";
+    const popup = window.open(authData.auth_url + sep + "state=frontend-gmail", "gmail-connect", "width=520,height=700");
+    window.addEventListener("message", function onMsg(event) {
+      if (event.data && event.data.type === "gmail_connected") {
+        window.removeEventListener("message", onMsg);
+        document.getElementById("gmailStatus").textContent = "Gmail connected!";
+        refreshGmailStatus();
+      }
+    });
+  } catch (e) {
+    document.getElementById("gmailStatus").textContent = `Connect failed: ${e.message}`;
+  }
+};
+
+document.getElementById("uploadBtn").onclick = async () => {
+  const fileInput = document.getElementById("resumeFile");
+  if (!fileInput.files.length) { alert("Choose a .pdf or .docx file first"); return; }
+  const formData = new FormData();
+  formData.append("file", fileInput.files[0]);
+  try {
+    const data = await api("/resumes/upload", { method: "POST", body: formData });
+    resumeId = data.id;
+    document.getElementById("resumeResult").textContent = JSON.stringify(data, null, 2);
+  } catch (e) { document.getElementById("resumeResult").textContent = `Error: ${e.message}`; }
+};
+
+document.getElementById("submitJobBtn").onclick = async () => {
+  const raw_text = document.getElementById("jobText").value || null;
+  const url = document.getElementById("jobUrl").value || null;
+  const source_type = url && !raw_text ? "url" : "paste";
+  try {
+    const data = await api("/job-posts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_text, url, resume_id: resumeId, source_type }),
+    });
+    outputId = data.id;
+    outputStatus = data.status;
+    document.getElementById("jobResult").textContent = JSON.stringify(data, null, 2);
+    setPipelineStatus("Submitted. Starting the tailoring pipeline…");
+    await pollOutput(outputId);
+  } catch (e) { document.getElementById("jobResult").textContent = `Error: ${e.message}`; }
+};
+
+document.getElementById("downloadBtn").onclick = async () => {
+  if (!outputId) { alert("Submit a job post first"); return; }
+  if (PROCESSING.has(outputStatus)) { setPipelineStatus(`Still tailoring (status '${outputStatus}'). Polling continues — try again shortly.`); return; }
+  try {
+    const resp = await fetch(`${API_BASE}/tailored-outputs/${outputId}/download`, {
+      headers: { "Authorization": `Bearer ${token}` },
+    });
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({}));
+      throw new Error(err.detail || `Download failed (${resp.status})`);
+    }
+    const blob = await resp.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = "tailored_resume.pdf";
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  } catch (e) {
+    document.getElementById("finalResult").textContent = `Error: ${e.message}`;
+  }
+};
+
+document.getElementById("approveBtn").onclick = async () => {
+  if (!outputId) { alert("Submit a job post first"); return; }
+  if (PROCESSING.has(outputStatus)) { setPipelineStatus(`Still tailoring (status '${outputStatus}'). Approve once it is ready.`); return; }
+  try {
+    const data = await api(`/tailored-outputs/${outputId}/approve`, { method: "POST" });
+    outputStatus = "approved";
+    document.getElementById("finalResult").textContent = JSON.stringify(data, null, 2);
+  } catch (e) { document.getElementById("finalResult").textContent = `Error: ${e.message}`; }
+};
+
+document.getElementById("sendBtn").onclick = async () => {
+  if (!outputId) { alert("Submit a job post first"); return; }
+  if (PROCESSING.has(outputStatus)) { setPipelineStatus(`Still tailoring (status '${outputStatus}').`); return; }
+  if (outputStatus !== "approved") { alert("Approve the output first before sending."); return; }
+  setPipelineStatus("Sending email…");
+  try {
+    const data = await api(`/tailored-outputs/${outputId}/send`, { method: "POST" });
+    outputStatus = "sent";
+    setPipelineStatus("Email sent.");
+    document.getElementById("finalResult").textContent = JSON.stringify(data, null, 2);
+  } catch (e) {
+    setPipelineStatus("");
+    document.getElementById("finalResult").textContent = `Send failed: ${e.message}`;
+  }
+};
+</script>
+</body>
+</html>
