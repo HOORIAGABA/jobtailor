@@ -81,8 +81,9 @@ def _run_pipeline_for_output(output_id: str) -> None:
             output_filename=f"resume_{job_post.id}.docx",
             contact_info=contact_info,
         )
+        pdf_path = None
         try:
-            render_resume_pdf(
+            pdf_path = render_resume_pdf(
                 tailored_json=tailored_resume,
                 output_filename=f"resume_{job_post.id}.pdf",
                 contact_info=contact_info,
@@ -94,7 +95,9 @@ def _run_pipeline_for_output(output_id: str) -> None:
             models.TailoredOutput.id == output_id
         ).first()
         output.tailored_json = json.dumps(tailored_resume)
+        output.gap_analysis = json.dumps(result.get("missing_requirements") or [])
         output.docx_path = docx_path
+        output.pdf_path = pdf_path
         output.status = "ready"
         db.add(
             models.Message(

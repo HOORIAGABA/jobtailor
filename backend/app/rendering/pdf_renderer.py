@@ -83,14 +83,16 @@ class ResumePDF(FPDF):
             self.set_text_color(*color)
             self.cell(w=0, h=h, text=_clean(text), align="C", new_x="LMARGIN", new_y="NEXT")
 
-    def render_header(self, contact_info: dict | None):
+    def render_header(self, contact_info: dict | None, resume_json: dict | None = None):
         self.add_page()
         contact_info = contact_info or {}
-        self.header_line(contact_info.get("full_name") or "Your Name", self.NAME, True, INK, 9)
+        resume_json = resume_json or {}
+        full_name = contact_info.get("full_name") or resume_json.get("full_name") or "Your Name"
+        self.header_line(full_name, self.NAME, True, INK, 9)
         if contact_info.get("title"):
             self.header_line(contact_info["title"], self.TITLE, False, MUTED, 6)
         parts = []
-        for key in ("location", "phone", "email", "linkedin"):
+        for key in ("location", "phone", "email", "linkedin", "github"):
             val = (contact_info.get(key) or "").strip()
             if val:
                 parts.append(val)
@@ -189,11 +191,23 @@ class ResumePDF(FPDF):
                 self.entry_line(lead.get("title", ""), lead.get("company"), lead.get("dates"))
                 self.bullets(lead.get("bullets", []))
 
+        extra_sections = tailored_json.get("extra_sections") or []
+        for section in extra_sections:
+            if not isinstance(section, dict):
+                continue
+            heading = section.get("heading", "")
+            entries = section.get("entries", [])
+            if heading and entries:
+                self.section(heading)
+                for entry in entries:
+                    self.entry_line(entry.get("title", ""), entry.get("company"), entry.get("dates"))
+                    self.bullets(entry.get("bullets", []))
+
 
 def render_resume_pdf(tailored_json: dict, output_filename: str, contact_info: dict | None = None) -> str:
     """Render a tailored resume as an A4 PDF. Returns the absolute file path."""
     pdf = ResumePDF()
-    pdf.render_header(contact_info)
+    pdf.render_header(contact_info, tailored_json)
     pdf.render_sections(tailored_json)
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)

@@ -50,10 +50,24 @@ class ResumeSection(BaseModel):
     company: Optional[str] = None
     dates: Optional[str] = None
     heading: Optional[str] = None
+    date_start: Optional[str] = None
+    date_end: Optional[str] = None
+    date_ongoing: Optional[bool] = None
     bullets: list[str] = []
 
 
+class ExtraSection(BaseModel):
+    heading: str
+    entries: list[ResumeSection] = []
+
+
 class ResumeJSON(BaseModel):
+    full_name: Optional[str] = None
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    location: Optional[str] = None
+    linkedin: Optional[str] = None
+    github: Optional[str] = None
     summary_heading: Optional[str] = None
     summary: str = ""
     skills: list[str] = []
@@ -62,6 +76,7 @@ class ResumeJSON(BaseModel):
     education: list[ResumeSection] = []
     certifications: list[ResumeSection] = []
     leadership: list[ResumeSection] = []
+    extra_sections: list[ExtraSection] = []
 
 
 class ResumeOut(BaseModel):
@@ -69,6 +84,7 @@ class ResumeOut(BaseModel):
     label: str
     version: int
     resume_json: ResumeJSON
+    raw_text: Optional[str] = None  # extracted source text (diagnostics / re-parse)
 
     class Config:
         from_attributes = True
@@ -96,8 +112,10 @@ class TailoredOutputOut(BaseModel):
     resume_id: str
     status: str
     docx_path: Optional[str]
+    pdf_path: Optional[str] = None
     tailored_json: str
     draft_message: Optional[str] = None
+    gap_analysis: Optional[list] = None  # [{requirement, note}] — JD items the resume doesn't support
     error: Optional[str] = None  # populated when status == failed
 
     class Config:

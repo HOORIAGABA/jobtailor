@@ -15,7 +15,15 @@ _NON_LOCATION_WORDS = re.compile(
     r"pipeline|model|docker|kubernetes|react|node|java|c\+\+|typescript|sql|database|api|rest|"
     r"aws|gcp|azure|tensorflow|pytorch|llama|openai|langgraph|n8n|tensor|"
     r"fast|engineer|associate|specialist|developer|intern|lead|senior|junior|"
-    r"automation|machine|learning|computer|vision|processing|data|science)",
+    r"automation|machine|learning|computer|vision|processing|data|science|"
+    r"numpy|matplotlib|matplot|pandas|scikit|sklearn|scipy|keras|opencv|cv2|"
+    r"yolo|flask|fastapi|django|uvicorn|fastify|jenkins|linux|ubuntu|windows|"
+    r"mysql|mongodb|postgres|postgresql|redis|excel|tableau|powerbi|"
+    r"github|gitlab|bitbucket|streamlit|gradio|selenium|beautifulsoup|"
+    r"huggingface|transformers|langchain|chromadb|pinecone|weaviate|airflow|"
+    r"visualization|charts|dashboards|frameworks|methodologies|agile|scrum|kubernetes|"
+    r"google|slack|gmail|calendar|sheets|docs|drive|meet|gdrive|clickup|openai|"
+    r"gemini|whatsapp|twilio|jira|notion|trello|asana)",
     re.IGNORECASE,
 )
 

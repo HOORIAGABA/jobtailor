@@ -1,61 +1,94 @@
-"""Module 3.6 from the blueprint — drafts a short outreach message.
-Never sends anything itself; output is always routed through the
-human-approval step before the Sender module touches it."""
+"""Outreach agent — drafts a short message for the recruiter.
+
+Sends full resume context (not truncated) so the LLM can reference
+specific skills, projects, and experience accurately.
+"""
+import re
 import json
 from app.agents.llm_client import call_llm, extract_json
 
-SYSTEM_PROMPT = """You are a professional outreach message writer. Draft a concise, compelling message a candidate could send to a recruiter or hiring manager after applying for a job.
+SYSTEM_PROMPT = """You are an expert email writer. Draft a complete, polished,
+application email for a specific job, based solely on the candidate's resume
+and the job requirements provided.
 
-## Guidelines:
-- Keep it to 4-6 sentences max. Recruiters are busy.
-- Start with a clear statement of interest in the specific role and company.
-- Mention 2-3 specific skills or experiences from the tailored resume that directly match the job requirements. Reference actual project names, technologies, or achievements.
-- Show you've researched the company or role (reference something specific from the job posting).
-- End with a clear call to action (e.g., "I'd welcome the opportunity to discuss how my experience aligns with your team's needs").
-- Tone: confident but not arrogant, professional but not stiff, specific not generic.
-- Do NOT use clichés like "I'm a hard worker" or "I'm passionate about everything". Show, don't tell.
-- Do NOT mention "attached resume" — the resume is already included in the application.
-- Do NOT start with "I came across your job posting" — too generic.
+## Email structure — follow exactly, in order:
+1. Subject line: "Application for {ROLE} Position – {Candidate Full Name}"
+2. Greeting: "Dear {Company} Hiring Team,"
+3. Opening paragraph (2-3 sentences): state interest in the specific role and
+   company, then a one-sentence summary of why the candidate is a strong fit.
+4. "Relevant Experience Highlights": 2-4 bullet points. Each bullet: role,
+   company, and date range (e.g. "Machine Learning Associate at NexPred
+   Solutions (Mar–Aug 2026)"), followed by the 1-2 strongest achievements for
+   THIS job, taken only from the resume.
+5. "Selected Projects" (if the resume has projects): 2-3 bullets, each with the
+   project name and its 1-2 strongest achievements relevant to the job.
+6. "Technical Skills": one compact sentence listing the comma-separated skills
+   most relevant to THIS job (from the resume's skills only).
+7. One sentence on education and the top certification, if present in the resume.
+8. Closing paragraph (2-3 sentences): enthusiasm for the role/company and a
+   clear call to action (e.g. request an interview or further discussion).
+9. Signature block using ONLY the candidate's real contact info from the resume:
+   {full_name}
+   Email: {email}
+   Phone: {phone}
+   LinkedIn: {linkedin}
 
-## What good looks like:
-"With 3 years of hands-on ML engineering experience, including deploying production models on NVIDIA Jetson edge hardware and building 20+ n8n automation workflows, I'm excited about the Junior AI/ML Engineer role at [Company]. My work on the RGB-Thermal aerial detection pipeline (96.5% mAP@50) and enterprise automation systems aligns closely with your team's focus on applied ML and process optimization."
+## Rules:
+- Use ONLY facts present in the resume. NEVER invent experience, employers,
+  projects, metrics, skills, or contact details.
+- Keep metrics, numbers, titles, and dates exactly as they appear in the resume.
+- Reorder and highlight existing content to match the job; do not fabricate.
+- Tone: professional, confident, specific — not generic filler.
+- This email will be sent with the tailored resume attached, so referencing the
+  attachment is fine.
 
-## What NOT to write:
-- "I came across your job posting and believe my background is a strong fit"
-- "I'm excited about this opportunity"
-- "Please find my resume attached"
-- Long paragraphs or bullet points
-- Generic statements that could apply to any job
+## Input:
+The "resume" field is the full parsed resume and includes the candidate's
+full_name, email, phone, location, linkedin, and github.
 
 ## Output format:
-Return JSON: {"message": string}
+Return JSON: {"subject": string, "message": string}
+- "subject" is ONLY the subject line.
+- "message" is the full email body starting with the greeting and ending with
+  the signature block. Do NOT include the subject inside "message".
 Return only valid JSON, no commentary."""
 
 
+def _estimate_years(resume: dict) -> int | None:
+    summary = resume.get("summary", "") if isinstance(resume, dict) else ""
+    m = re.search(r'(\d{1,2})\+?\s*years?', summary or "", re.IGNORECASE)
+    if m:
+        return int(m.group(1))
+    year_pattern = re.compile(r'(20\d{2})')
+    all_years = []
+    for exp in (resume.get("experience") or []) if isinstance(resume, dict) else []:
+        dates = exp.get("dates", "") or ""
+        years = year_pattern.findall(dates)
+        all_years.extend(int(y) for y in years)
+    if all_years:
+        span = max(all_years) - min(all_years) + 1
+        return max(span, 1)
+    return None
+
+
+def _check_fabrication(message: str, tailored_resume: dict) -> str | None:
+    msg_lower = message.lower()
+    m = re.search(r'(\d{1,2})\+?\s*years?\s*(?:of\s+)?(?:experience|hands-on)', msg_lower)
+    if m:
+        claimed = int(m.group(1))
+        resume_years = _estimate_years(tailored_resume)
+        if resume_years and claimed > resume_years + 1:
+            return (
+                f"Message claims {claimed}+ years of experience but resume indicates ~{resume_years} years. "
+                f"Revise to match the candidate's actual experience."
+            )
+    return None
+
+
 def draft_outreach_message(job_requirements: dict, tailored_resume: dict, feedback: str | None = None) -> str:
-    # Extract specific experience details for the message
-    experience_details = []
-    for exp in tailored_resume.get("experience", [])[:2]:
-        experience_details.append({
-            "title": exp.get("title", ""),
-            "company": exp.get("company", ""),
-            "top_bullets": exp.get("bullets", [])[:2],
-        })
-
-    # Extract relevant projects
-    project_details = []
-    for proj in tailored_resume.get("projects", [])[:2]:
-        project_details.append({
-            "name": proj.get("title", ""),
-            "top_bullets": proj.get("bullets", [])[:1],
-        })
-
     user_payload = json.dumps({
         "job_requirements": job_requirements,
-        "resume_summary": tailored_resume.get("summary", ""),
-        "top_skills": tailored_resume.get("skills", [])[:5],
-        "key_experience": experience_details,
-        "key_projects": project_details,
+        "resume": tailored_resume,
         "previous_feedback": feedback or "",
     })
     system = SYSTEM_PROMPT
@@ -66,4 +99,25 @@ def draft_outreach_message(job_requirements: dict, tailored_resume: dict, feedba
         data = extract_json(response)
     except (json.JSONDecodeError, ValueError):
         return ""
-    return data.get("message", "")
+    subject = str(data.get("subject", "")).strip()
+    msg = data.get("message", "")
+
+    fab_error = _check_fabrication(msg, tailored_resume)
+    if fab_error:
+        retry_payload = json.dumps({
+            "job_requirements": job_requirements,
+            "resume": tailored_resume,
+            "previous_feedback": (feedback or "") + "\n" + fab_error,
+        })
+        system2 = SYSTEM_PROMPT + "\n\n## Critical correction:\n" + fab_error
+        response2 = call_llm(system=system2, user=retry_payload, json_mode=True)
+        try:
+            data2 = extract_json(response2)
+            msg = data2.get("message", msg)
+            subject = str(data2.get("subject", subject)).strip()
+        except (json.JSONDecodeError, ValueError):
+            pass
+
+    if subject:
+        return f"Subject: {subject}\n\n{msg}".strip()
+    return msg.strip()

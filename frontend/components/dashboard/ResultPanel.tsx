@@ -16,6 +16,7 @@ interface ResumeView {
   certifications?: { title: string; company?: string; bullets: string[] }[];
   education?: { title: string; company?: string; bullets: string[] }[];
   leadership?: { title: string; company?: string; bullets: string[] }[];
+  extra_sections?: { heading: string; entries: { title: string; company?: string; bullets: string[] }[] }[];
 }
 
 function parseResume(output: TailoredOutputOut): ResumeView {
@@ -216,6 +217,9 @@ export function ResultPanel({
           <SectionList title="Certifications" items={resume.certifications} />
           <SectionList title="Education" items={resume.education} />
           <SectionList title="Leadership" items={resume.leadership} />
+          {resume.extra_sections?.map((section, i) => (
+            <SectionList key={i} title={section.heading} items={section.entries} />
+          ))}
         </div>
 
         <div>
@@ -223,6 +227,22 @@ export function ResultPanel({
           <pre className="mt-1 whitespace-pre-wrap rounded-lg bg-slate-50 p-3 text-sm text-slate-700">
             {current.draft_message || "No draft message yet."}
           </pre>
+
+          {current.gap_analysis && current.gap_analysis.length > 0 && (
+            <div className="mt-4">
+              <h3 className="text-sm font-semibold text-slate-800">
+                Missing requirements to fix
+              </h3>
+              <ul className="mt-1 space-y-2 rounded-lg border border-amber-200 bg-amber-50 p-3 text-sm text-amber-900">
+                {current.gap_analysis.map((gap, i) => (
+                  <li key={i}>
+                    <span className="font-semibold">{gap.requirement}</span>
+                    {gap.note && <span className="block text-amber-800">— {gap.note}</span>}
+                  </li>
+                ))}
+              </ul>
+            </div>
+          )}
         </div>
       </div>
     </section>

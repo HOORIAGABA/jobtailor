@@ -93,20 +93,24 @@ def _guardrail_issues(tailored_resume: dict, original_resume: dict | None = None
                     "Summary does not reference the target role. Rewrite the summary to address the '%s' role." % job_requirements.get("role")
                 )
 
-        # 2. Experience must be reordered by relevance when there are 2+ entries.
+        # 2. Experience must be reordered by relevance when there are 2+ entries
+        #    and the original order is NOT already the most-relevant-first order.
         orig_exp = [e for e in original_resume.get("experience", []) if e]
         new_exp = [e for e in tailored_resume.get("experience", []) if e]
         if len(orig_exp) >= 2 and len(new_exp) >= 2:
+            from app.agents.tailoring_agent import _reorder_experience, _job_terms as _extract_terms
+            job_terms = _extract_terms(job_requirements)
             orig_first = _entry_key(orig_exp[0])
             new_first = _entry_key(new_exp[0])
             hits = {_entry_key(e) for e in orig_exp}
-            # If the first role changed AND the new first is one of the original roles,
-            # relevance-reordering happened. If the order is byte-identical, flag it.
             if orig_first == new_first and len(hits) == len(orig_exp):
-                issues.append(
-                    "Experience order was not tailored: entries are in the original order. "
-                    "Reorder experience so the role most relevant to this job is FIRST."
-                )
+                ideal_order = _reorder_experience(list(orig_exp), job_terms)
+                ideal_first = _entry_key(ideal_order[0]) if ideal_order else orig_first
+                if ideal_first != orig_first:
+                    issues.append(
+                        "Experience order was not tailored: entries are in the original order. "
+                        "Reorder experience so the role most relevant to this job is FIRST."
+                    )
 
         # 3. Skills must be the candidate's REAL skills, not job-requirement sentences.
         #    A JD requirement bullet is long prose ("Strong full-stack experience with
@@ -146,7 +150,17 @@ def _summarize_review(parsed: dict, issues: list[str], kind: str) -> dict:
     except (TypeError, ValueError):
         score = 100
     combined = list(dict.fromkeys(issues + llm_issues))
-    needs_revision = bool(llm_issues or issues) or bool(parsed.get("needs_revision"))
+
+    critical_issues = [i for i in combined if any(kw in i.lower() for kw in (
+        "empty", "missing", "fabricat", "invent", "not present",
+        "dropped", "lost", "removed",
+    ))]
+
+    needs_revision = (
+        score < 80
+        or bool(critical_issues)
+    )
+
     return {
         "score": score,
         "needs_revision": needs_revision,
@@ -226,7 +240,7 @@ def review_resume(job_requirements: dict, tailored_resume: dict, original_resume
     return result
 
 
-def review_message(job_requirements: dict, draft_message: str) -> dict:
+def review_message(job_requirements: dict, draft_message: str, tailored_resume: dict | None = None) -> dict:
     payload = json.dumps({
         "job_requirements": job_requirements,
         "draft_message": draft_message,
@@ -237,4 +251,12 @@ def review_message(job_requirements: dict, draft_message: str) -> dict:
         parsed = {}
     if not isinstance(parsed, dict):
         parsed = {}
-    return _summarize_review(parsed, [], "message")
+
+    issues = []
+    if tailored_resume:
+        from app.agents.outreach_agent import _check_fabrication
+        fab = _check_fabrication(draft_message, tailored_resume)
+        if fab:
+            issues.append(fab)
+
+    return _summarize_review(parsed, issues, "message")

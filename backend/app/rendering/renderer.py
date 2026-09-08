@@ -127,9 +127,9 @@ def _add_centered(doc: Document, text: str, size: Pt, bold: bool = False, color:
 
 def render_resume(tailored_json: dict, output_filename: str, contact_info: dict | None = None) -> str:
     """
-    tailored_json: {summary_heading, summary, skills, experience, projects,
-                    education, certifications, leadership}
-    contact_info: optional {full_name, title, email, phone, location, linkedin}
+    tailored_json: {full_name, summary_heading, summary, skills, experience, projects,
+                    education, certifications, leadership, extra_sections, ...}
+    contact_info: optional {full_name, title, email, phone, location, linkedin, github}
     Returns the absolute path to the generated .docx file.
     """
     contact_info = contact_info or {}
@@ -149,7 +149,7 @@ def render_resume(tailored_json: dict, output_filename: str, contact_info: dict 
     # =====================================================================
     # HEADER — name, title headline, contact line (plain text, ATS-safe)
     # =====================================================================
-    full_name = contact_info.get("full_name") or "Your Name"
+    full_name = contact_info.get("full_name") or tailored_json.get("full_name") or "Your Name"
     _add_centered(doc, full_name, NAME_SIZE, bold=True, space_after=Pt(1))
 
     title = contact_info.get("title")
@@ -235,6 +235,21 @@ def render_resume(tailored_json: dict, output_filename: str, contact_info: dict 
         for lead in leadership:
             _add_entry_line(doc, lead.get("title", ""), lead.get("company"), lead.get("dates"))
             _add_bullets(doc, lead.get("bullets", []))
+
+    # =====================================================================
+    # 8. EXTRA SECTIONS (publications, languages, volunteering, etc.)
+    # =====================================================================
+    extra_sections = tailored_json.get("extra_sections") or []
+    for section in extra_sections:
+        if not isinstance(section, dict):
+            continue
+        heading = section.get("heading", "")
+        entries = section.get("entries", [])
+        if heading and entries:
+            _add_section_heading(doc, heading)
+            for entry in entries:
+                _add_entry_line(doc, entry.get("title", ""), entry.get("company"), entry.get("dates"))
+                _add_bullets(doc, entry.get("bullets", []))
 
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     output_path = os.path.join(OUTPUT_DIR, output_filename)

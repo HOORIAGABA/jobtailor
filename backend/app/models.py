@@ -42,6 +42,7 @@ class Resume(Base):
     user_id: Mapped[str] = mapped_column(String, ForeignKey("users.id"), nullable=False)
     label: Mapped[str] = mapped_column(String, default="Default")
     resume_json: Mapped[str] = mapped_column(Text, nullable=False)  # JSON-serialized structured resume
+    raw_text: Mapped[str | None] = mapped_column(Text, nullable=True)  # extracted source text (debug/re-parse)
     version: Mapped[int] = mapped_column(Integer, default=1)
     is_active: Mapped[bool] = mapped_column(default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
@@ -70,6 +71,8 @@ class TailoredOutput(Base):
     resume_id: Mapped[str] = mapped_column(String, ForeignKey("resumes.id"), nullable=False)
     tailored_json: Mapped[str] = mapped_column(Text, nullable=False)
     docx_path: Mapped[str] = mapped_column(String, nullable=True)
+    pdf_path: Mapped[str] = mapped_column(String, nullable=True)
+    gap_analysis: Mapped[str | None] = mapped_column(Text, nullable=True)  # JSON list of missing requirements
     status: Mapped[str] = mapped_column(String, default="pending")  # pending|ready|approved|sent|failed
     created_at: Mapped[datetime] = mapped_column(DateTime, default=datetime.utcnow)
 

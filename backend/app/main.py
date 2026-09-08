@@ -52,6 +52,18 @@ async def lifespan(app: FastAPI):
                 if name not in col_names:
                     conn.execute(text(f"ALTER TABLE users ADD COLUMN {name} {sql_type}"))
 
+            out_cols = conn.execute(text("PRAGMA table_info(tailored_outputs)")).fetchall()
+            out_col_names = {row[1] for row in out_cols}
+            if "pdf_path" not in out_col_names:
+                conn.execute(text("ALTER TABLE tailored_outputs ADD COLUMN pdf_path VARCHAR"))
+            if "gap_analysis" not in out_col_names:
+                conn.execute(text("ALTER TABLE tailored_outputs ADD COLUMN gap_analysis TEXT"))
+
+            res_cols = conn.execute(text("PRAGMA table_info(resumes)")).fetchall()
+            res_col_names = {row[1] for row in res_cols}
+            if "raw_text" not in res_col_names:
+                conn.execute(text("ALTER TABLE resumes ADD COLUMN raw_text TEXT"))
+
     # The tailoring pipeline now runs in a background thread. If the process
     # restarts mid-pipeline (edit with --reload, crash, etc.) those outputs
     # are orphaned as pending/processing — flag them so the UI stops polling

@@ -41,6 +41,7 @@ export interface TailoredOutputOut {
   docx_path?: string | null;
   tailored_json: string;
   draft_message?: string | null;
+  gap_analysis?: Array<{ requirement: string; note?: string }> | null;
   error?: string | null;
 }
 
@@ -52,7 +53,18 @@ export interface ResumeSection {
   bullets: string[];
 }
 
+export interface ExtraSection {
+  heading: string;
+  entries: ResumeSection[];
+}
+
 export interface ResumeJSON {
+  full_name?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  location?: string | null;
+  linkedin?: string | null;
+  github?: string | null;
   summary_heading?: string | null;
   summary: string;
   skills: string[];
@@ -61,6 +73,7 @@ export interface ResumeJSON {
   education: ResumeSection[];
   certifications: ResumeSection[];
   leadership: ResumeSection[];
+  extra_sections?: ExtraSection[];
 }
 
 export interface ResumeOut {

@@ -95,4 +95,5 @@ def submit_job_post(
         docx_path=tailored_output.docx_path,
         tailored_json=tailored_output.tailored_json,
         draft_message=None,
+        gap_analysis=[],
     )

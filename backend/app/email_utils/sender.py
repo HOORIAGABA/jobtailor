@@ -12,6 +12,19 @@ from email.mime.application import MIMEApplication
 from app.config import settings
 
 
+def split_subject_line(body: str, default_subject: str) -> tuple[str, str]:
+    """If body begins with a 'Subject: ...' line, pull it out as the email
+    subject; otherwise return the provided default and the body unchanged."""
+    if body:
+        lines = body.splitlines()
+        if lines and lines[0].strip().lower().startswith("subject:"):
+            subject = lines[0].split(":", 1)[1].strip()
+            rest = "\n".join(lines[1:]).strip()
+            if subject:
+                return subject, rest
+    return default_subject, body
+
+
 def send_email_with_attachment(
     to_email: str,
     subject: str,
