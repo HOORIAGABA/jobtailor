@@ -22,6 +22,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import httpx
+
 from app.domain.errors import BudgetExceeded, LLMRateLimited, LLMUnavailable
 
 logger = logging.getLogger(__name__)
@@ -308,15 +310,191 @@ class ScriptedClient:
         return LLMResponse(text=text, prompt_tokens=10, completion_tokens=20)
 
 
+# ── OpenAI-compatible (almost everything else) ────────────────────────
+
+class OpenAICompatibleClient:
+    """Any endpoint speaking OpenAI's `/chat/completions`.
+
+    That is most of them: OpenRouter, Groq, Cerebras, Together, Ollama, and the
+    various gateways that proxy other providers. One adapter, so picking a
+    different free tier is an `.env` change.
+
+    Structured output is the part that actually differs between them, so it
+    degrades in three steps rather than assuming (see `_response_format`).
+    """
+
+    MAX_ATTEMPTS = 3
+
+    def __init__(self, api_key: str, model: str, base_url: str,
+                 timeout: float = 45.0) -> None:
+        if not model:
+            raise LLMUnavailable("LLM_MODEL is empty.")
+        if not base_url:
+            raise LLMUnavailable(
+                "LLM_BASE_URL is required for an OpenAI-compatible provider "
+                "(e.g. https://openrouter.ai/api/v1)."
+            )
+        self._api_key = api_key
+        self._model_name = model
+        self._url = base_url.strip().rstrip("/") + "/chat/completions"
+        self._timeout = timeout
+        # Remembered per client so the ladder below is climbed once, not once
+        # per call.
+        self._schema_mode: str | None = None
+
+    def complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        schema: dict[str, Any] | None = None,
+        max_tokens: int = 2048,
+        temperature: float = 0.2,
+    ) -> LLMResponse:
+        messages = ([{"role": "system", "content": system}] if system else []) + [
+            {"role": "user", "content": user}
+        ]
+        headers = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
+
+        last: Exception | None = None
+        for attempt in range(1, self.MAX_ATTEMPTS + 1):
+            for mode in self._schema_modes(schema):
+                body: dict[str, Any] = {
+                    "model": self._model_name,
+                    "messages": messages,
+                    "max_tokens": max_tokens,
+                    "temperature": temperature,
+                }
+                if fmt := _response_format(mode, schema):
+                    body["response_format"] = fmt
+
+                try:
+                    resp = httpx.post(self._url, headers=headers, json=body,
+                                      timeout=self._timeout)
+                except Exception as exc:                     # noqa: BLE001
+                    last = exc
+                    break                                     # network: retry, don't downgrade
+
+                if resp.status_code == 429:
+                    last = LLMRateLimited(_body_text(resp) or "rate limited")
+                    break                                     # retry, don't downgrade
+
+                if resp.status_code == 400 and mode != "none":
+                    # The endpoint rejected this structured-output style. Try
+                    # the next one down rather than giving up on the provider.
+                    logger.info("%s rejected response_format=%s; degrading",
+                                self._model_name, mode)
+                    continue
+
+                if resp.status_code >= 400:
+                    raise LLMUnavailable(
+                        f"{self._model_name} returned {resp.status_code}: "
+                        f"{_body_text(resp)[:300]}"
+                    )
+
+                self._schema_mode = mode                      # remember what worked
+                return _parse_openai_response(resp.json())
+
+            if attempt == self.MAX_ATTEMPTS or not _is_rate_limit(last or Exception()):
+                break
+            delay = _backoff(attempt, last)
+            logger.warning("Rate limited, waiting %.0fs (%d/%d)",
+                           delay, attempt, self.MAX_ATTEMPTS)
+            time.sleep(delay)
+
+        if last is not None and _is_rate_limit(last):
+            wait = retry_after(last)
+            raise LLMRateLimited(
+                f"{self._model_name} is rate limited"
+                + (f"; the provider asked for {wait:.0f}s" if wait else "")
+                + f". Gave up after {self.MAX_ATTEMPTS} attempts."
+            ) from last
+        raise LLMUnavailable(
+            f"Call to {self._model_name!r} at {self._url} failed: {last}"
+        ) from last
+
+    def _schema_modes(self, schema: dict[str, Any] | None) -> list[str]:
+        """Structured-output styles to try, best first.
+
+        Endpoints vary: some support a full JSON schema, some only "give me
+        JSON", some neither. Probing in order and remembering the winner beats
+        assuming — and beats a per-provider capability table that goes stale.
+        """
+        if schema is None:
+            return ["none"]
+        if self._schema_mode:
+            return [self._schema_mode]
+        return ["json_schema", "json_object", "none"]
+
+    def probe(self) -> None:
+        self.complete(system="", user="ok", max_tokens=8, temperature=0.0)
+
+
+def _response_format(mode: str, schema: dict[str, Any] | None) -> dict | None:
+    if mode == "json_schema" and schema is not None:
+        return {
+            "type": "json_schema",
+            "json_schema": {"name": "response", "schema": schema, "strict": False},
+        }
+    if mode == "json_object":
+        return {"type": "json_object"}
+    return None
+
+
+def _parse_openai_response(data: dict) -> LLMResponse:
+    try:
+        text = data["choices"][0]["message"]["content"] or ""
+    except (KeyError, IndexError, TypeError) as exc:
+        raise LLMUnavailable(f"Unexpected response shape: {str(data)[:200]}") from exc
+    usage = data.get("usage") or {}
+    return LLMResponse(
+        text=text,
+        prompt_tokens=int(usage.get("prompt_tokens") or 0),
+        completion_tokens=int(usage.get("completion_tokens") or 0),
+    )
+
+
+def _body_text(resp) -> str:
+    try:
+        return resp.text
+    except Exception:                                          # noqa: BLE001
+        return ""
+
+
+# ── construction ──────────────────────────────────────────────────────
+
+# Anything not "google" is assumed to speak OpenAI's API, because nearly
+# everything does. Listing the names people actually type avoids a pointless
+# "unknown provider" wall.
+_OPENAI_COMPATIBLE = frozenset({
+    "openai", "openai_compatible", "openrouter", "groq", "cerebras",
+    "together", "ollama", "mistral", "deepseek", "fireworks", "custom",
+})
+
+
 def build_client(settings) -> LLMClient:
     """Construct the configured provider. One switch, one place."""
-    provider = (settings.llm_provider or "google").lower()
+    provider = (settings.llm_provider or "google").strip().lower()
+
     if provider == "google":
         return GoogleClient(
             api_key=settings.llm_api_key,
             model=settings.llm_model,
             timeout=settings.llm_timeout_seconds,
         )
+
+    if provider in _OPENAI_COMPATIBLE:
+        return OpenAICompatibleClient(
+            api_key=settings.llm_api_key,
+            model=settings.llm_model,
+            base_url=settings.llm_base_url,
+            timeout=settings.llm_timeout_seconds,
+        )
+
     raise LLMUnavailable(
-        f"Unknown LLM_PROVIDER {provider!r}. Supported: google."
+        f"Unknown LLM_PROVIDER {provider!r}. Use 'google', or any "
+        f"OpenAI-compatible provider with LLM_BASE_URL set: "
+        f"{', '.join(sorted(_OPENAI_COMPATIBLE))}."
     )

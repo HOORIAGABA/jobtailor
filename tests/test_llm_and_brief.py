@@ -340,3 +340,48 @@ def test_backoff_falls_back_to_exponential_when_nothing_is_stated():
     from app.io.llm import _backoff
     assert 0 < _backoff(1) <= 2
     assert _backoff(3) > _backoff(1) / 2           # grows, jitter aside
+
+
+# ══ model id format ═══════════════════════════════════════════════════
+
+def test_a_display_name_is_rejected_before_any_call_is_made():
+    """The third model-id problem in this project, caught locally this time.
+
+    Pasting "Gemini 2.5 Flash Lite" from the console produced a 400 from
+    Google reading "unexpected model name format" — minutes into a run, with a
+    gRPC traceback. It is a config error and belongs at startup.
+    """
+    from app.config import check
+    problems = check(Settings(llm_api_key="k", llm_model="Gemini 2.5 Flash Lite"))
+    assert len(problems) == 1
+    assert "display name" in problems[0]
+    assert "gemini-2.5-flash-lite" in problems[0]      # tells you what to write
+
+
+@pytest.mark.parametrize("model_id", [
+    "gemini-2.5-flash-lite",
+    "gemini-3.8-flash",
+    "openai/gpt-oss-20b",
+    "llama-3.1-8b-instant",
+    "gpt-4o-mini",
+])
+def test_real_model_ids_pass(model_id):
+    from app.config import check
+    assert check(Settings(llm_api_key="k", llm_model=model_id)) == []
+
+
+@pytest.mark.parametrize("bad", [
+    "Gemini 2.5 Flash Lite",     # display name
+    "Gemini-2.5-Flash",          # capitalised
+    "gemini 2.5 flash",          # spaces
+    "  ",                        # blank
+])
+def test_malformed_model_ids_are_caught(bad):
+    from app.config import check
+    assert check(Settings(llm_api_key="k", llm_model=bad))
+
+
+def test_suggestion_converts_a_display_name():
+    from app.config import suggest_model_id
+    assert suggest_model_id("Gemini 2.5 Flash Lite") == "gemini-2.5-flash-lite"
+    assert suggest_model_id("  Gemini   3.8  Flash ") == "gemini-3.8-flash"
