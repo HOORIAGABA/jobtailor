@@ -11,15 +11,18 @@ you confirm the recipient, subject and body yourself.
 
 ## Status
 
-Under construction. Domain and engine layers complete: **93 tests, no API key
-required** — the guarantees live in deterministic code, so they are testable
-without a model.
+**The engine is complete: 124 tests, 0.3s, no API key.**
+
+Every guarantee the product advertises is enforced in deterministic Python and
+asserted without calling a model — including an end-to-end test that runs a
+resume and a plan through normalize → validate → apply → diff and checks that
+nothing was fabricated and nothing was lost.
 
 | Phase | State |
 |---|---|
 | Domain model + operations | done |
-| Engine — normalize, validate | done |
-| Engine — apply, diff | next |
+| Engine — normalize, validate, apply, diff | **done** |
+| Agents — job brief, planner, writer | next |
 | Agents (brief, planner, writer) | — |
 | Pipeline (LangGraph + checkpointing) | — |
 | API + UI (diff view, approval gate) | — |
