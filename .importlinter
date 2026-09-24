@@ -5,10 +5,15 @@
 #   I5  deterministic work is never done by an LLM
 #
 # `engine` and `domain` cannot import `agents` or `io`, so no matching,
-# scoring, validation or application can quietly acquire an LLM call.
+# scoring, validation or application can quietly acquire a model call.
+#
+# Order matters and is easy to get wrong: `agents` sits ABOVE `io` because an
+# agent uses the LLM client, not the other way round.
 
 [importlinter]
-root_packages = app
+root_packages =
+    app
+include_external_packages = True
 
 [importlinter:contract:layers]
 name = Layered architecture
@@ -16,13 +21,13 @@ type = layers
 layers =
     app.api
     app.pipeline
-    app.io
     app.agents
+    app.io
     app.engine
     app.domain
 
 [importlinter:contract:engine-is-deterministic]
-name = engine and domain must never reach the LLM or the network
+name = engine and domain must never reach a model or the network
 type = forbidden
 source_modules =
     app.engine
@@ -30,7 +35,9 @@ source_modules =
 forbidden_modules =
     app.io
     app.agents
+    app.pipeline
     httpx
-    google.generativeai
+    requests
+    google
     langchain_core
     langgraph
