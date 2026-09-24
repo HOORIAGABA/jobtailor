@@ -11,7 +11,7 @@ you confirm the recipient, subject and body yourself.
 
 ## Status
 
-**159 tests, 0.4s, no API key.**
+**184 tests, 0.4s, no API key.**
 
 Every guarantee the product advertises is enforced in deterministic Python and
 asserted without calling a model — including an end-to-end test that runs a
@@ -22,8 +22,9 @@ nothing was fabricated and nothing was lost.
 |---|---|
 | Domain model + operations | done |
 | Engine — normalize, validate, apply, diff | done |
-| LLM client, schema conversion, budget | **done** |
-| Agent — job brief | **done** |
+| Engine — evidence matching | **done** |
+| LLM client, schema conversion, budget | done |
+| Agent — job brief | done |
 | Agents — planner, writer | next |
 | Agents (brief, planner, writer) | — |
 | Pipeline (LangGraph + checkpointing) | — |

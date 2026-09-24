@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from app.domain.models import ResumeDoc
+from app.engine.text import tokens as text_tokens
 from app.domain.ops import (
     ADVISORY_OPS, DropBullet, Op, PromoteItem, Reject, ReorderBullets,
     ReorderItems, RewriteBullet, SetSkills, SetSummary,
@@ -54,15 +55,10 @@ def grounding_corpus(doc: ResumeDoc, confirmed: Iterable[str] = ()) -> set[str]:
 
 _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 
-# A leading dot is allowed so `.NET` survives as one token. Without it the
-# token becomes `net`, which no longer matches a `.net` entry in the grounding
-# corpus — and the rewrite gets rejected for naming a tool the resume declares.
-_WORD = re.compile(r"(?:\.[A-Za-z]|[A-Za-z0-9])[A-Za-z0-9+#.\-]*")
-
-
-def _tokens(text: str) -> list[str]:
-    """Words with trailing sentence punctuation stripped, leading dot kept."""
-    return [t.rstrip(".-") or t for t in _WORD.findall(text or "")]
+# Tokenisation lives in engine.text so every comparison in the system uses the
+# same notion of a word. Three disagreeing tokenisers is what the previous
+# version had.
+_tokens = text_tokens
 
 # Words that are capitalized for grammatical reasons, not because they name
 # something. Without this every sentence-initial word looks like an entity.
