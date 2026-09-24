@@ -1,0 +1,36 @@
+# Enforces the layer rule in CI. This one file is what keeps two invariants
+# true after six months of edits:
+#
+#   I3  one producer per fact class
+#   I5  deterministic work is never done by an LLM
+#
+# `engine` and `domain` cannot import `agents` or `io`, so no matching,
+# scoring, validation or application can quietly acquire an LLM call.
+
+[importlinter]
+root_packages = app
+
+[importlinter:contract:layers]
+name = Layered architecture
+type = layers
+layers =
+    app.api
+    app.pipeline
+    app.io
+    app.agents
+    app.engine
+    app.domain
+
+[importlinter:contract:engine-is-deterministic]
+name = engine and domain must never reach the LLM or the network
+type = forbidden
+source_modules =
+    app.engine
+    app.domain
+forbidden_modules =
+    app.io
+    app.agents
+    httpx
+    google.generativeai
+    langchain_core
+    langgraph
