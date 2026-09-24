@@ -26,6 +26,7 @@ from app.agents.job_brief import build_job_brief
 from app.agents.planner import plan
 from app.agents.writer import write_bullets
 from app.config import Settings, check
+from app.domain.errors import BudgetExceeded, LLMRateLimited, LLMUnavailable
 from app.domain.models import Contact, RawEntry, RawResume, RawSection
 from app.engine.apply import apply_ops
 from app.engine.diff import build_diff
@@ -241,5 +242,32 @@ def main() -> int:
     return 0 if all(ok for _, ok in checks) else 1
 
 
+def run() -> int:
+    """Turn the expected failures into advice instead of a stack trace.
+
+    A rate limit is not a bug — it is the free tier working as documented — so
+    it should read like a note, not a crash.
+    """
+    try:
+        return main()
+    except LLMRateLimited as exc:
+        print(f"\n{RED}Rate limited.{RESET} {exc}")
+        print(f"\n{DIM}Free tiers are capped per minute — Gemini 3.8 Flash is 5.")
+        print("Options:")
+        print("  1. wait a minute and run it again")
+        print("  2. try a model with a higher allowance, e.g.")
+        print("     LLM_MODEL=gemini-3.5-flash       (or gemini-3.5-flash-lite)")
+        print(f"  3. check your actual limits: https://aistudio.google.com/rate-limit{RESET}")
+        return 2
+    except LLMUnavailable as exc:
+        print(f"\n{RED}Could not reach the model.{RESET} {exc}")
+        print(f"\n{DIM}If the model id was retired, pick the current one from"
+              f" https://aistudio.google.com and update LLM_MODEL in .env.{RESET}")
+        return 2
+    except BudgetExceeded as exc:
+        print(f"\n{RED}Budget exceeded.{RESET} {exc}")
+        return 3
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(run())

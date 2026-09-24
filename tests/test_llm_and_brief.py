@@ -301,3 +301,42 @@ def test_an_address_ending_a_sentence_still_verifies():
     from app.agents.job_brief import emails_in
     assert emails_in("Apply to careers@acme.com.") == {"careers@acme.com"}
     assert verify_email("careers@acme.com", "Apply to careers@acme.com.") == "careers@acme.com"
+
+
+# ══ retry behaviour ═══════════════════════════════════════════════════
+
+def test_retry_after_reads_the_providers_own_number():
+    """Gemini states the wait twice; either spelling must be understood."""
+    from app.io.llm import retry_after
+    gemini = (
+        "429 You exceeded your current quota. * Quota exceeded for metric: "
+        "generate_content_free_tier_requests, limit: 5, model: gemini-3.8-flash "
+        "Please retry in 28.424272419s."
+    )
+    assert retry_after(Exception(gemini)) == pytest.approx(28.42, abs=0.01)
+    assert retry_after(Exception("violations { } retry_delay { seconds: 28 }")) == 28.0
+    assert retry_after(Exception("Retry-After: 30")) == 30.0
+    assert retry_after(Exception("something else entirely")) is None
+
+
+def test_backoff_honours_the_provider_instead_of_guessing_shorter():
+    """The bug this fixes: we waited 1.7s when the server asked for 28.
+
+    On a per-minute quota an early retry does double damage — it fails, and it
+    spends another request from the same allowance.
+    """
+    from app.io.llm import _backoff
+    exc = Exception("Please retry in 28.4s")
+    assert _backoff(1, exc) == pytest.approx(29.4, abs=0.01)
+    assert _backoff(1, exc) > _backoff(1)          # longer than the guess
+
+
+def test_backoff_is_capped_even_if_the_provider_asks_for_an_hour():
+    from app.io.llm import MAX_RETRY_WAIT, _backoff
+    assert _backoff(1, Exception("Please retry in 3600s")) == MAX_RETRY_WAIT
+
+
+def test_backoff_falls_back_to_exponential_when_nothing_is_stated():
+    from app.io.llm import _backoff
+    assert 0 < _backoff(1) <= 2
+    assert _backoff(3) > _backoff(1) / 2           # grows, jitter aside

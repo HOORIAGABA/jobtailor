@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import logging
 import random
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -128,14 +129,23 @@ class GoogleClient:
                 last = exc
                 if not _is_rate_limit(exc) or attempt == self.MAX_ATTEMPTS:
                     break
-                delay = _backoff(attempt)
-                logger.warning("Rate limited, retrying in %.1fs (%d/%d)",
-                               delay, attempt, self.MAX_ATTEMPTS)
+                delay = _backoff(attempt, exc)
+                asked = retry_after(exc)
+                logger.warning(
+                    "Rate limited, waiting %.0fs (%d/%d)%s",
+                    delay, attempt, self.MAX_ATTEMPTS,
+                    "" if asked is None else f" — provider asked for {asked:.0f}s",
+                )
                 time.sleep(delay)
 
         if last is not None and _is_rate_limit(last):
+            wait = retry_after(last)
             raise LLMRateLimited(
-                f"{self._model_name} rate limited after {self.MAX_ATTEMPTS} attempts."
+                f"{self._model_name} is rate limited"
+                + (f"; the provider asked for {wait:.0f}s between requests" if wait else "")
+                + f". Gave up after {self.MAX_ATTEMPTS} attempts. "
+                "Free tiers are usually limited per minute — either wait, or set "
+                "LLM_MODEL to a model with a higher allowance."
             ) from last
         raise LLMUnavailable(
             f"Call to {self._model_name!r} failed: {last}. "
@@ -159,8 +169,47 @@ def _is_rate_limit(exc: Exception) -> bool:
     return any(m in text for m in ("429", "rate limit", "resource_exhausted", "quota"))
 
 
-def _backoff(attempt: int) -> float:
-    """Exponential with jitter — without jitter, parallel runs retry in lockstep."""
+# Providers say how long to wait. Gemini puts it in the error as
+# "Please retry in 28.4s" and again as "retry_delay { seconds: 28 }".
+_RETRY_AFTER_PATTERNS = (
+    re.compile(r"retry in\s+([\d.]+)\s*s", re.IGNORECASE),
+    re.compile(r"retry_delay\s*\{\s*seconds:\s*(\d+)", re.IGNORECASE),
+    re.compile(r"retry[- ]after[\"']?\s*[:=]\s*[\"']?(\d+)", re.IGNORECASE),
+)
+
+# Never sleep longer than this, whatever the server says. A provider asking for
+# an hour means the quota is gone, not that we should hang.
+MAX_RETRY_WAIT = 75.0
+
+
+def retry_after(exc: Exception) -> float | None:
+    """Seconds the provider asked us to wait, if it said.
+
+    Parsed from the message rather than from a provider-specific exception
+    type, so this keeps working when the provider changes — and works for any
+    other provider that states a delay.
+    """
+    text = str(exc)
+    for pattern in _RETRY_AFTER_PATTERNS:
+        if (m := pattern.search(text)) is not None:
+            try:
+                return float(m.group(1))
+            except ValueError:
+                continue
+    return None
+
+
+def _backoff(attempt: int, exc: Exception | None = None) -> float:
+    """How long to wait before retrying.
+
+    Honour the provider's own number when it gives one. Guessing shorter is
+    actively harmful on a per-minute quota: the early retry fails AND consumes
+    another request from the same allowance. Only fall back to exponential
+    backoff with jitter when the provider says nothing.
+    """
+    if exc is not None and (asked := retry_after(exc)) is not None:
+        # A second of slack, because the window is measured server-side.
+        return min(asked + 1.0, MAX_RETRY_WAIT)
     return min(2 ** attempt, 20) * (0.5 + random.random() / 2)
 
 
