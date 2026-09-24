@@ -1,0 +1,18 @@
+[tool.pytest.ini_options]
+# `pythonpath` puts the project root on sys.path so `import app` works with a
+# bare `pytest`. Without it only `python -m pytest` works, because that form
+# adds the current directory implicitly — which is how a "works on my machine"
+# difference hides.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q --strict-markers"
+
+# pytest-asyncio warns when this is unset and will change the default later.
+asyncio_default_fixture_loop_scope = "function"
+
+# Order matters: pytest applies these in sequence and LATER entries win, so the
+# broad rule goes first and the specific one last.
+filterwarnings = [
+    "default",                           # third-party deprecations are noise
+    "error::DeprecationWarning:app.*",   # ours are failures
+]
