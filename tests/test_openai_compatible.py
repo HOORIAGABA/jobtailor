@@ -247,6 +247,24 @@ def test_config_requires_a_base_url_for_non_google_providers():
                           llm_model="m", llm_base_url=BASE)) == []
 
 
+# ── test isolation ────────────────────────────────────────────────────
+# These two pin the fix in tests/conftest.py. The test above passed on a clean
+# checkout and in CI, and failed on any machine with a real `.env` — because
+# `Settings()` loaded it and inherited a perfectly good LLM_BASE_URL. A failure
+# that appears only once the project is configured correctly is the worst kind
+# to leave unpinned, so the isolation itself is now asserted.
+
+def test_settings_do_not_read_the_developers_dotenv():
+    assert Settings.model_config.get("env_file") is None
+
+
+def test_settings_are_empty_unless_a_test_sets_them():
+    blank = Settings()
+    assert blank.llm_api_key == ""
+    assert blank.llm_model == ""
+    assert blank.llm_base_url == ""
+
+
 def test_ollama_does_not_need_a_key():
     """A local endpoint has nothing to authenticate against."""
     assert check(Settings(llm_provider="ollama", llm_model="llama3.1",

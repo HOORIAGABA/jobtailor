@@ -32,6 +32,22 @@ from app.engine.text import content_words, lower_tokens, ngrams
 MIN_SHARED_WORDS = 2
 
 
+# A skills section LISTS abilities; experience and projects DEMONSTRATE them.
+# Only the second kind can be evidence — otherwise "Languages: Python, SQL"
+# becomes strong proof that the candidate has done Python work, when all it
+# proves is that they wrote the word down.
+NON_EVIDENCE_KINDS = frozenset({"skills", "summary"})
+
+
+def evidence_bullets(doc: ResumeDoc):
+    """Bullets that can serve as evidence — everything except declarations."""
+    for section in doc.sections:
+        if section.kind in NON_EVIDENCE_KINDS:
+            continue
+        for item in section.items:
+            yield from item.bullets
+
+
 @dataclass(frozen=True)
 class JobElement:
     """One addressable thing the job asks for."""
@@ -108,7 +124,7 @@ def compute_evidence(brief: JobBrief, doc: ResumeDoc) -> EvidenceIndex:
     index = AliasIndex.build(brief.terms)
     elements = job_elements(brief)
 
-    bullets = [(b.id, b.text) for b in doc.all_bullets()]
+    bullets = [(b.id, b.text) for b in evidence_bullets(doc)]
     bullet_terms = {bid: index.find(text) for bid, text in bullets}
     bullet_words = {bid: content_words(text) for bid, text in bullets}
 

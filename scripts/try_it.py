@@ -40,6 +40,20 @@ DIM, BOLD, GREEN, RED, YELLOW, RESET = (
 )
 
 
+def setup_logging(verbose: bool) -> None:
+    """Without this, every logger.info in the pipeline goes nowhere.
+
+    Python's default handler only surfaces WARNING and above, so the "dropped
+    N operations" diagnostics were being written and discarded — which is how
+    an empty plan looked like a silent mystery.
+    """
+    import logging
+    logging.basicConfig(
+        level=logging.INFO if verbose else logging.WARNING,
+        format=f"{DIM}  %(levelname)-7s %(name)-24s %(message)s{RESET}",
+    )
+
+
 def head(text: str) -> None:
     print(f"\n{BOLD}{'─' * 70}\n{text}\n{'─' * 70}{RESET}")
 
@@ -109,6 +123,7 @@ To apply, send your CV to careers@nimbus.example.
 
 
 def main() -> int:
+    setup_logging("-v" in sys.argv or "--verbose" in sys.argv)
     settings = Settings()
     if problems := check(settings):
         print(f"{RED}Cannot run — configuration is incomplete:{RESET}")
@@ -157,16 +172,26 @@ def main() -> int:
     index = compute_evidence(brief, doc)
     strong = [l for l in index.links if l.strength == "strong"]
     print(f"  {len(strong)} strong links, {len(index.links) - len(strong)} hints")
-    for link in strong[:8]:
+    seen = set()
+    for link in strong:
+        if link.bullet_id in seen:
+            continue                      # one line can back several elements
+        seen.add(link.bullet_id)
         print(f"    {GREEN}strong{RESET}  {link.bullet_id:<14} "
               f"{DIM}{doc.text_of(link.bullet_id)[:48]}{RESET}")
+    print(f"  {DIM}(skills-section lines are declarations, not evidence){RESET}")
     if gaps := undemonstrated_terms(brief, index):
         print(f"\n  {YELLOW}no evidence for: {', '.join(gaps)}{RESET}")
 
     # ── S3 plan ───────────────────────────────────────────────────────
     head("4. PLAN — what to change (1 call)")
     corpus = grounding_corpus(doc)
-    ops = plan(brief, doc, index, corpus, client)
+    discarded: list[str] = []
+    ops = plan(brief, doc, index, corpus, client, dropped=discarded)
+    if not ops:
+        print(f"  {YELLOW}the model produced no usable operations{RESET}")
+    for reason in discarded:
+        print(f"    {RED}dropped{RESET}  {reason}")
     for op in ops:
         target = getattr(op, "bullet_id", "") or getattr(op, "item_id", "") \
             or getattr(op, "section_id", "") or getattr(op, "requirement", "")

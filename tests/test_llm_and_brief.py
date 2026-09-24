@@ -385,3 +385,24 @@ def test_suggestion_converts_a_display_name():
     from app.config import suggest_model_id
     assert suggest_model_id("Gemini 2.5 Flash Lite") == "gemini-2.5-flash-lite"
     assert suggest_model_id("  Gemini   3.8  Flash ") == "gemini-3.8-flash"
+
+
+# ══ field-name tolerance ══════════════════════════════════════════════
+
+@pytest.mark.parametrize("alias", ["statement", "description", "signal", "requirement", "text"])
+def test_the_brief_accepts_the_names_models_actually_use(alias):
+    """Observed live: the model returned "description" and "signal" instead of
+    "statement", costing a retry — a real request from a per-minute allowance.
+
+    Being liberal here is safe because the CONTENT is verified separately: a
+    span that does not support the statement is discarded whatever it is called.
+    """
+    draft = DraftGrounded.model_validate({alias: "own model retraining", "start": 0, "end": 10})
+    assert draft.statement == "own model retraining"
+
+
+def test_required_has_guidance_so_terms_are_not_all_optional():
+    """Observed live: a posting saying "Required: Python, PyTorch, Airflow"
+    came back with every term marked nice-to-have."""
+    field = DraftTerm.model_fields["required"]
+    assert field.description and "required" in field.description.lower()

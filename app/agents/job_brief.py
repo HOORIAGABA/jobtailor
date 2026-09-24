@@ -22,7 +22,7 @@ import logging
 import re
 from typing import Protocol
 
-from pydantic import BaseModel, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field
 
 from app.agents.base import as_json, call_structured, prompt_version
 from app.domain.models import Grounded, JobBrief, Problem, Term
@@ -39,9 +39,21 @@ MIN_SPAN_OVERLAP = 0.3
 # they are not in the schema the model sees.
 
 class DraftGrounded(BaseModel):
-    statement: str = Field(description="One specific claim about the role.")
+    # Models rename this field constantly — "description", "signal",
+    # "requirement" — especially on endpoints that accept a schema without
+    # enforcing it. Accepting the synonyms costs nothing and saves a retry,
+    # which on a free tier is a real request from a per-minute allowance.
+    # This latitude is only safe because the *content* is verified separately:
+    # a span that does not support the statement is discarded either way.
+    statement: str = Field(
+        validation_alias=AliasChoices(
+            "statement", "description", "signal", "requirement", "text", "summary"),
+        description="One specific claim about the role, in a full sentence.",
+    )
     start: int = Field(description="Character offset where the supporting text begins.")
     end: int = Field(description="Character offset where the supporting text ends.")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 
 class DraftProblem(DraftGrounded):
@@ -56,7 +68,17 @@ class DraftTerm(BaseModel):
     weight: int = Field(default=5, description="1-10, how much the posting emphasises it.")
     kind: str = Field(default="skill",
                       description="skill | tool | domain | seniority | credential")
-    required: bool = False
+    required: bool = Field(
+        default=False,
+        # Without this the field defaults to False and stays there, so a
+        # posting saying "Required: Python, PyTorch, Airflow" comes back with
+        # every term marked optional.
+        description=(
+            "true when the posting lists this under required/must-have, false "
+            "when it is nice-to-have or merely mentioned. Read the posting's "
+            "own wording — do not mark everything optional."
+        ),
+    )
 
 
 class JobBriefDraft(BaseModel):

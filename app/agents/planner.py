@@ -203,12 +203,28 @@ def _targets_exist(op: Op, doc: ResumeDoc) -> bool:
     return True
 
 
-def clean_ops(ops: list[Op], doc: ResumeDoc, max_ops: int = MAX_OPS) -> list[Op]:
-    """Assign ids, drop unresolvable targets, cap the batch."""
+def clean_ops(
+    ops: list[Op],
+    doc: ResumeDoc,
+    max_ops: int = MAX_OPS,
+    dropped: list[str] | None = None,
+) -> list[Op]:
+    """Assign ids, drop unresolvable targets, cap the batch.
+
+    `dropped` collects a readable reason per discarded op. A plan that silently
+    shrinks to nothing is indistinguishable from a model that said nothing, and
+    those need very different fixes — so the reasons are returned, not only
+    logged.
+    """
     kept: list[Op] = []
     for n, op in enumerate(ops, start=1):
         if not _targets_exist(op, doc):
-            logger.info("Dropped %s: target id does not resolve", op.op)
+            target = (getattr(op, "bullet_id", "") or getattr(op, "item_id", "")
+                      or getattr(op, "section_id", ""))
+            reason = f"{op.op}: no such id {target!r}"
+            logger.info("Dropped %s", reason)
+            if dropped is not None:
+                dropped.append(reason)
             continue
         op.op_id = f"op{n}"
         kept.append(op)
@@ -233,6 +249,7 @@ def plan(
     client: LLMClient,
     *,
     max_tokens: int = 3072,
+    dropped: list[str] | None = None,
 ) -> list[Op]:
     """One model call. Returns operations, never prose."""
     result = call_structured(
@@ -244,7 +261,17 @@ def plan(
         temperature=0.2,
         stage="planner",
     )
-    ops = clean_ops(result.ops, doc)
+    returned = len(result.ops)
+    ops = clean_ops(result.ops, doc, dropped=dropped)
+
+    if returned and not ops:
+        logger.warning(
+            "The model returned %d operations and none survived id checking. "
+            "Usually it invented ids rather than using the ones it was given.",
+            returned,
+        )
+    elif not returned:
+        logger.warning("The model returned an empty plan.")
 
     logger.info(
         "Plan: %d operations (%d rewrites, %d advisory)",

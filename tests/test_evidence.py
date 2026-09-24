@@ -303,3 +303,57 @@ def test_the_new_matcher_inverts_that_result():
 
     assert strong_bullets(index) == {"exp.1.b.1"}
     assert all(l.strength == "hint" for l in index.for_bullet("exp.2.b.1"))
+
+
+# ══ declaration vs demonstration ══════════════════════════════════════
+
+def test_a_skills_line_is_never_evidence():
+    """Regression from a live run: "Languages: Python, SQL" was being counted
+    as strong evidence that the candidate had done Python work.
+
+    A skills section LISTS abilities; experience and projects DEMONSTRATE
+    them. Only the second can back a claim — otherwise writing a word down is
+    treated as proof of having done it.
+    """
+    doc = ResumeDoc(
+        sections=[
+            Section(id="sec.skills", kind="skills", heading="SKILLS", items=[
+                Item(id="skl.1", bullets=[
+                    Bullet(id="skl.1.b.1", text="Languages: Python, SQL"),
+                    Bullet(id="skl.1.b.2", text="Tools: Airflow, Docker"),
+                ]),
+            ]),
+            Section(id="sec.experience", kind="experience", heading="EXPERIENCE", items=[
+                Item(id="exp.2", title="Analyst", bullets=[
+                    Bullet(id="exp.2.b.1", text="Built Airflow pipelines in Python"),
+                ]),
+            ]),
+        ],
+        skill_inventory=["Python", "SQL", "Airflow", "Docker"],
+    )
+    brief = JobBrief(terms=[Term(term="Python", weight=9),
+                            Term(term="Airflow", weight=8)])
+    index = compute_evidence(brief, doc)
+
+    assert strong_bullets(index) == {"exp.2.b.1"}
+    assert not any(l.bullet_id.startswith("skl.") for l in index.links)
+
+
+def test_a_declared_skill_is_still_not_reported_as_a_gap():
+    """Declaring it is weak, but it is not *missing* — the candidate said it."""
+    doc = ResumeDoc(
+        sections=[Section(id="sec.skills", kind="skills", heading="SKILLS", items=[
+            Item(id="skl.1", bullets=[Bullet(id="skl.1.b.1", text="Tools: Kubernetes")]),
+        ])],
+        skill_inventory=["Kubernetes"],
+    )
+    brief = JobBrief(terms=[Term(term="Kubernetes", aliases=["k8s"], weight=5)])
+    index = compute_evidence(brief, doc)
+
+    assert index.links == []                       # nothing demonstrates it
+    assert undemonstrated_terms(brief, index) == []  # but it is not absent
+
+
+def test_the_summary_is_not_evidence_either():
+    from app.engine.evidence import NON_EVIDENCE_KINDS
+    assert NON_EVIDENCE_KINDS == {"skills", "summary"}

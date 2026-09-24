@@ -289,3 +289,34 @@ def test_a_bad_plan_is_caught_downstream_and_the_run_survives():
     assert "rewrite_bullet:seniority_escalation" in codes
     assert "set_skills:unsupported_entity" in codes
     assert result.fabrication_count == 2
+
+
+# ══ diagnosing an empty plan ══════════════════════════════════════════
+
+def test_dropped_operations_report_their_reason():
+    """A plan that silently shrinks to nothing looks identical to a model that
+    said nothing — and those need opposite fixes. So reasons come back."""
+    reasons: list[str] = []
+    kept = clean_ops([
+        RewriteBullet(bullet_id="exp.1.b.1"),      # real
+        RewriteBullet(bullet_id="made.up.b.9"),    # invented id
+        ReorderBullets(item_id="nope.7", order=[]),
+    ], _doc(), dropped=reasons)
+
+    assert len(kept) == 1
+    assert len(reasons) == 2
+    assert "made.up.b.9" in reasons[0] and "rewrite_bullet" in reasons[0]
+
+
+def test_plan_surfaces_drops_to_the_caller():
+    doc, brief = _doc(), _brief()
+    client = ScriptedClient([{"ops": [
+        {"op": "rewrite_bullet", "bullet_id": "totally.invented.b.1"},
+        {"op": "flag_gap", "requirement": "PyTorch"},
+    ]}])
+    reasons: list[str] = []
+    ops = plan(brief, doc, _index(doc, brief), doc.skill_inventory, client,
+               dropped=reasons)
+
+    assert [o.op for o in ops] == ["flag_gap"]
+    assert "totally.invented.b.1" in reasons[0]

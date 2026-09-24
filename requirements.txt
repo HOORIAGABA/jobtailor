@@ -25,9 +25,13 @@ psycopg[binary]==3.2.3
 alembic==1.13.3
 
 # --- Extraction ---------------------------------------------------------
-# pymupdf4llm is AGPL. Fine for an open-source project; swap for pdfplumber
-# behind the Extractor interface if that ever changes.
-pymupdf4llm==0.0.17
+# PyMuPDF, not pymupdf4llm. The design document specified the latter for its
+# "block-level layout analysis", but measured against tests/test_extract.py's
+# two-column fixture it interleaves the columns exactly as pdfplumber does.
+# Column detection is ours (app/engine/layout.py), built from the box
+# coordinates PyMuPDF already returns — so the extra layer bought nothing and
+# pulled in an OCR stack on top. Same AGPL licence either way.
+pymupdf==1.28.2
 
 # --- Rendering ----------------------------------------------------------
 python-docx==1.1.2
