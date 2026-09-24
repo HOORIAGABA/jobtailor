@@ -1,5 +1,7 @@
 # JobTailor
 
+[![CI](https://github.com/HOORIAGABA/jobtailor/actions/workflows/ci.yml/badge.svg)](https://github.com/HOORIAGABA/jobtailor/actions/workflows/ci.yml)
+
 **An agentic resume-tailoring system that can prove it didn't make anything up.**
 
 Give it a job posting and your resume. It studies the role, rewrites your resume
@@ -11,7 +13,7 @@ you confirm the recipient, subject and body yourself.
 
 ## Status
 
-**184 tests, 0.4s, no API key.**
+**209 tests, 0.5s, no API key.**
 
 Every guarantee the product advertises is enforced in deterministic Python and
 asserted without calling a model — including an end-to-end test that runs a
@@ -22,10 +24,10 @@ nothing was fabricated and nothing was lost.
 |---|---|
 | Domain model + operations | done |
 | Engine — normalize, validate, apply, diff | done |
-| Engine — evidence matching | **done** |
+| Engine — evidence matching | done |
 | LLM client, schema conversion, budget | done |
-| Agent — job brief | done |
-| Agents — planner, writer | next |
+| Agents — job brief, planner, writer | **done** |
+| Pipeline (LangGraph), API, UI | next |
 | Agents (brief, planner, writer) | — |
 | Pipeline (LangGraph + checkpointing) | — |
 | API + UI (diff view, approval gate) | — |
@@ -47,6 +49,16 @@ posting ─► brief ─────────────┘                 
                                      │
                               render ─► send
 ```
+
+## See it work
+
+```bash
+python scripts/try_it.py
+```
+
+Runs a sample resume and job posting through the whole chain — job brief,
+evidence matching, planning, writing, validation, diff — and prints what the
+validator refused and why. Three model calls, ~15k tokens.
 
 ## Running locally
 
