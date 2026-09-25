@@ -84,7 +84,12 @@ def _plan(doc) -> list:
         RewriteBullet(op_id="x2", bullet_id=intern.bullets[0].id,
                       text="Drove the data migration end-to-end",
                       rationale="strengthen"),                  # escalation
-        SetSkills(op_id="x3", groups=[SkillGroup(label="ML", skills=["PyTorch"])]),
+        # Keeps all four real skills, so `skills_dropped` is not what catches
+        # it — the only fault left is the one skill the corpus cannot support.
+        SetSkills(op_id="x3", groups=[
+            SkillGroup(label="Languages", skills=["Python", "SQL"]),
+            SkillGroup(label="ML", skills=["Airflow", "Docker", "PyTorch"]),
+        ]),
     ]
 
 

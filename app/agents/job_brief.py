@@ -22,10 +22,11 @@ import logging
 import re
 from typing import Protocol
 
-from pydantic import AliasChoices, BaseModel, ConfigDict, Field
+from pydantic import AliasChoices, BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.base import as_json, call_structured, prompt_version
 from app.domain.models import Grounded, JobBrief, Problem, Term
+from app.engine.contact import best_recruiter_email, emails_in, recruiter_candidates
 from app.io.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -55,6 +56,36 @@ class DraftGrounded(BaseModel):
 
     model_config = ConfigDict(populate_by_name=True)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_a_span_pair(cls, data):
+        """`{"span": [512, 572]}` means the same as `{"start": 512, "end": 572}`.
+
+        Measured on a real run: every one of 14 grounded items came back with
+        `span` instead of the two integers, because the domain type it mirrors
+        is `source_span: tuple[int, int]` and that is the obvious encoding for
+        a pair of offsets. The model is not wrong; it picked the other
+        unambiguous spelling of the same fact.
+
+        This is coercion, not repair. Nothing is guessed: two numbers in, two
+        numbers out, and `Grounded.verify` still checks the span against the
+        posting afterwards. A malformed pair is left alone so validation
+        reports it instead of a silent zero.
+        """
+        if not isinstance(data, dict):
+            return data
+        if "start" in data and "end" in data:
+            return data
+        pair = data.get("span") or data.get("source_span") or data.get("offsets")
+        if isinstance(pair, (list, tuple)) and len(pair) == 2:
+            merged = dict(data)
+            merged["start"], merged["end"] = pair
+            merged.pop("span", None)
+            merged.pop("source_span", None)
+            merged.pop("offsets", None)
+            return merged
+        return data
+
 
 class DraftProblem(DraftGrounded):
     priority: str = Field(default="supporting",
@@ -62,17 +93,18 @@ class DraftProblem(DraftGrounded):
 
 
 class DraftTerm(BaseModel):
+    """Every field required. See `JobBriefDraft` for why."""
     term: str
-    aliases: list[str] = Field(default_factory=list,
-                               description="Other spellings, e.g. k8s for Kubernetes.")
-    weight: int = Field(default=5, description="1-10, how much the posting emphasises it.")
-    kind: str = Field(default="skill",
-                      description="skill | tool | domain | seniority | credential")
+    aliases: list[str] = Field(
+        description="Other SPELLINGS of the same thing: k8s for Kubernetes, "
+                    "postgres for PostgreSQL. Never a BROADER word — 'API' is "
+                    "not an alias for 'REST APIs', and offering one makes "
+                    "every line mentioning any API count as evidence of REST "
+                    "experience. Empty list when there are no other spellings."
+    )
+    weight: int = Field(description="1-10, how much the posting emphasises it.")
+    kind: str = Field(description="skill | tool | domain | seniority | credential")
     required: bool = Field(
-        default=False,
-        # Without this the field defaults to False and stays there, so a
-        # posting saying "Required: Python, PyTorch, Airflow" comes back with
-        # every term marked optional.
         description=(
             "true when the posting lists this under required/must-have, false "
             "when it is nice-to-have or merely mentioned. Read the posting's "
@@ -80,19 +112,69 @@ class DraftTerm(BaseModel):
         ),
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _kind_falls_back(cls, data):
+        """A missing `kind` becomes "skill" rather than killing the brief.
+
+        **This is not a retreat from the required-fields rule, and the
+        difference is worth being precise about.** That rule exists because a
+        Pydantic default keeps a field out of the schema's `required` array, so
+        a constrained decoder never has to emit it and the model never looks.
+        `kind` stays required *in the schema* — enforcing providers still force
+        the model to choose.
+
+        What changed is the knowledge that some endpoints accept a schema and
+        do not enforce it. Against those, a hard requirement does not make the
+        model look; it only turns a soft miss into a dead run. Two real runs
+        against `antigravity/gemini-3.1-pro-low` died on this exact field,
+        after 3 model calls apiece, with a complete and usable brief in hand.
+
+        `kind` can absorb this and `required` cannot. `kind` appears in exactly
+        one place downstream — context in the planner's payload — and gates no
+        matching, no evidence, no validation. `required` is the field that once
+        made a brief contradict itself (`required=False` on Python while its
+        own requirement said "Strong proficiency in Python"), so it stays hard:
+        a run that loses `required` should fail loudly.
+        """
+        if isinstance(data, dict) and not (data.get("kind") or "").strip():
+            logger.warning(
+                "Term %r came back without `kind` — the provider is not "
+                "enforcing the schema; defaulting to \"skill\"",
+                data.get("term", "?"),
+            )
+            return {**data, "kind": "skill"}
+        return data
+
 
 class JobBriefDraft(BaseModel):
-    company: str = ""
-    role: str = ""
-    seniority: str = ""
-    recruiter_email: str = ""
-    role_narrative: str = ""
-    problems_to_solve: list[DraftProblem] = Field(default_factory=list)
-    success_signals: list[DraftGrounded] = Field(default_factory=list)
-    hard_requirements: list[DraftGrounded] = Field(default_factory=list)
-    tone: str = Field(default="unclear",
-                      description="scrappy | pragmatic | formal | academic | unclear")
-    terms: list[DraftTerm] = Field(default_factory=list)
+    """Every field required, none defaulted.
+
+    **A model fills what the schema forces and skips the rest.** This is the
+    fourth place in this codebase the same lesson has landed, and the run that
+    produced it is worth writing down: every field here carried a default, and
+    a real posting came back with
+
+        company    ""          while `recruiter_email` was admin@annovasol.com
+        tone       "unclear"   the default, untouched
+        required   False       on EVERY term — including Python, which the
+                               brief's own req.3 called "Strong proficiency in
+                               Python"
+
+    The brief contradicted itself in one object, because `required` had a
+    default and nothing forced the model to look. Requiring a key does not
+    invent a value: "" and an empty list are still correct answers for a
+    posting that says nothing.
+    """
+    company: str = Field(description="The hiring company. \"\" if not stated.")
+    role: str = Field(description="The job title as written.")
+    seniority: str = Field(description="Junior/mid/senior etc. \"\" if not stated.")
+    role_narrative: str = Field(description="3-6 sentences on the actual job.")
+    problems_to_solve: list[DraftProblem]
+    success_signals: list[DraftGrounded]
+    hard_requirements: list[DraftGrounded]
+    tone: str = Field(description="scrappy | pragmatic | formal | academic | unclear")
+    terms: list[DraftTerm]
 
 
 # ── prompt ────────────────────────────────────────────────────────────
@@ -103,6 +185,25 @@ You read one job posting and describe the role it is really advertising.
 You are not summarising. You are explaining, to someone who will tailor a
 resume for this job, what this person will actually do and what the team cares
 about.
+
+WHAT YOU ARE READING MAY NOT BE A FORMAL POSTING
+Half of these arrive as a LinkedIn post: a few sentences, no headings, casual
+wording, requirements and responsibilities in the same breath. That is a normal
+input, not a broken one.
+
+When there are no separable sections, do not manufacture them. One sentence may
+be the only problem, the only requirement and the only success signal in the
+text — put it where it fits best and leave the other lists empty. Empty lists
+are correct and expected here. Padding them with plausible-sounding items is
+the single worst thing you can do, because everything downstream treats these
+as real.
+
+KEEP THE POSTING'S OWN WORDS
+Write each statement close to how the posting says it. "comfortable with
+FastAPI" can become "Experience with FastAPI"; it should not become "Proven
+track record of designing production-grade REST services". The further you
+drift, the less the span supports you, and an element whose span does not
+support it is discarded.
 
 GROUNDING
 Every element of problems_to_solve, success_signals and hard_requirements must
@@ -122,26 +223,42 @@ everything downstream treats these as real.
 
 FIELDS
 - company, role, seniority: as stated. "" if the posting does not say.
-- recruiter_email: only if an address appears literally in the text. Never
-  construct one from a domain or a name. "" otherwise. (This is verified in
-  code and discarded if invented.)
 - role_narrative: 3-6 sentences. What does this person do in a normal week?
   What problem exists that made the team open this role?
 - problems_to_solve: concrete problems the hire will own. priority is "core"
   for the reasons the role exists, "supporting" for real but secondary work,
   "peripheral" for occasional duties.
 - success_signals: what the posting says good looks like — outcomes, not tasks.
-- hard_requirements: only genuinely disqualifying requirements. A "nice to
-  have" is not a hard requirement.
+- hard_requirements: only genuinely disqualifying requirements THE RESUME CAN
+  ANSWER — capabilities and experience. A "nice to have" is not a hard
+  requirement, and neither is a condition of employment: office location,
+  working hours, shift times, visa status and salary are facts about the job,
+  not things a candidate demonstrates in a bullet. Listing them produces gaps
+  nobody can ever close.
 - tone: how the company writes. "unclear" is a valid and often correct answer.
 - terms: skills, tools, domain words and seniority markers worth matching a
   resume against. weight 1-10 by how much the posting emphasises each.
-  aliases matter: give the other spellings a resume might use ("k8s" for
-  "Kubernetes", "JS" for "JavaScript", "postgres" for "PostgreSQL").
+  aliases are other SPELLINGS of the same thing ("k8s" for "Kubernetes",
+  "JS" for "JavaScript", "postgres" for "PostgreSQL"). Never a broader word:
+  "API" is not an alias for "REST APIs". A broader alias makes every line
+  mentioning anything in that family count as proof of the specific thing.
+  Mark required true for anything the posting lists as required or must-have.
 
 Return only the JSON object."""
 
 PROMPT_VERSION = prompt_version(SYSTEM)
+
+# Measured, not guessed: a complete brief for a 1081-character posting —
+# 8 requirements, 6 terms, 1 problem — serialised to 1848 characters, about
+# 530 completion tokens. The old 2048 ceiling was roughly 4x that and still
+# produced a truncation, because the failure was never about brief size.
+#
+# The headroom here is for two things the measurement does not cover: a long
+# posting (this one was short), and a reasoning model spending part of the
+# budget before it writes anything. It is not a fix for truncation — that is
+# `call_structured`'s escalating ceiling. It is a first attempt that does not
+# need to escalate on an ordinary posting.
+BRIEF_MAX_TOKENS = 4096
 
 
 # ── cache ─────────────────────────────────────────────────────────────
@@ -166,20 +283,9 @@ class MemoryBriefCache:
 
 # ── verification (code, not prompt) ───────────────────────────────────
 
-_EMAIL = re.compile(r"[\w.+-]+@[\w-]+\.[\w.-]+")
 _PRIORITIES = {"core", "supporting", "peripheral"}
 _TONES = {"scrappy", "pragmatic", "formal", "academic", "unclear"}
 _KINDS = {"skill", "tool", "domain", "seniority", "credential"}
-
-
-def emails_in(text: str) -> set[str]:
-    """Every address literally present, lowercased.
-
-    Trailing sentence punctuation is stripped: postings routinely end with
-    "...send your CV to careers@acme.com." and the raw match would then carry
-    the full stop, so a perfectly real address would fail verification.
-    """
-    return {m.group().rstrip(".,;:").lower() for m in _EMAIL.finditer(text or "")}
 
 
 def verify_email(claimed: str, jd_text: str) -> str:
@@ -208,6 +314,17 @@ def _grounded(items, jd_text: str, factory) -> list:
 
 
 def _terms(drafts: list[DraftTerm]) -> list[Term]:
+    """Dedupe, clamp, and refuse an alias that belongs to another term.
+
+    The prompt asks for aliases to be other *spellings*. A model that offers
+    `FastAPI: aliases=["Python"]` is not misspelling anything — it is naming a
+    second, broader term, and `engine.evidence` would then treat every bullet
+    mentioning Python as STRONG evidence of FastAPI experience. A strong link
+    is supposed to be proof, so this one is enforced in code rather than asked
+    for: a rule that only lives in a prompt is a rule nothing keeps.
+    """
+    names = {(d.term or "").strip().lower() for d in drafts if (d.term or "").strip()}
+
     out: list[Term] = []
     seen: set[str] = set()
     for d in drafts:
@@ -216,9 +333,21 @@ def _terms(drafts: list[DraftTerm]) -> list[Term]:
         if not name or key in seen:
             continue
         seen.add(key)
+
+        aliases: set[str] = set()
+        for raw in d.aliases:
+            alias = raw.strip()
+            low = alias.lower()
+            if not alias or low == key:
+                continue
+            if low in names:
+                logger.info("Dropped alias %r on %r: it is another term", alias, name)
+                continue
+            aliases.add(alias)
+
         out.append(Term(
             term=name,
-            aliases=sorted({a.strip() for a in d.aliases if a.strip() and a.strip().lower() != key}),
+            aliases=sorted(aliases),
             weight=max(1, min(10, d.weight)),
             kind=d.kind if d.kind in _KINDS else "skill",
             required=bool(d.required),
@@ -232,7 +361,9 @@ def to_brief(draft: JobBriefDraft, jd_text: str) -> JobBrief:
         company=draft.company.strip(),
         role=draft.role.strip(),
         seniority=draft.seniority.strip(),
-        recruiter_email=verify_email(draft.recruiter_email, jd_text),
+        # Not from the draft: an address is a regex, not judgment (D-20).
+        recruiter_email=best_recruiter_email(jd_text),
+        email_candidates=recruiter_candidates(jd_text),
         role_narrative=draft.role_narrative.strip(),
         problems_to_solve=_grounded(
             draft.problems_to_solve, jd_text,
@@ -268,7 +399,7 @@ def build_job_brief(
     client: LLMClient,
     cache: BriefCache | None = None,
     *,
-    max_tokens: int = 2048,
+    max_tokens: int = BRIEF_MAX_TOKENS,
 ) -> JobBrief:
     """One model call, cached on the posting's hash.
 

@@ -185,6 +185,11 @@ class Term(BaseModel):
         return sorted(f for f in forms if f)
 
 
+# A span shorter than this cannot support a statement by the reverse test: one
+# generic word ("experience") would otherwise vouch for anything containing it.
+MIN_SPAN_WORDS_FOR_REVERSE = 2
+
+
 class Grounded(BaseModel):
     """A claim about the job that must be traceable to the posting's own text."""
     statement: str
@@ -194,17 +199,48 @@ class Grounded(BaseModel):
         """True when the span is valid and actually supports the statement.
 
         Cheap, deterministic grounding check: the span must be in range and the
-        statement's content words must overlap the quoted text. A model can
-        still paraphrase, but it cannot cite a span that says something else.
+        statement's wording must overlap the quoted text. A model can still
+        paraphrase, but it cannot cite a span that says something else.
+
+        **The overlap is checked in both directions, and that matters for
+        casual postings.** The original check divided only by the statement's
+        own words, which punishes the model for the one thing a LinkedIn post
+        forces it to do — normalise loose phrasing. Measured:
+
+            span       "comfortable with FastAPI"
+            statement  "Experience building APIs with FastAPI"
+            forward    1/4 = 0.25  -> DROPPED
+
+        The statement is a faithful reading of the span. It was deleted because
+        it was *longer* than the span. Four of those dropped in a row leaves an
+        empty brief, then thin evidence, then an empty plan — and every stage
+        downstream looks broken rather than starved.
+
+        Asking "is this statement about this span" is a symmetric question, so
+        it is now asked symmetrically. A span whose meaning survives in the
+        statement counts, even when the statement adds framing of its own —
+        which is precisely the Class-B latitude this system grants elsewhere.
+
+        The reverse direction needs at least `MIN_SPAN_WORDS_FOR_REVERSE`
+        content words in the span. Without that floor a one-word span
+        ("experience") would support any statement containing that word, which
+        is the loophole the whole check exists to close.
         """
         start, end = self.source_span
         if not (0 <= start < end <= len(jd_text)):
             return False
         quoted = set(_content_words(jd_text[start:end]))
         claimed = set(_content_words(self.statement))
-        if not claimed:
+        if not claimed or not quoted:
             return False
-        return len(claimed & quoted) / len(claimed) >= min_overlap
+
+        shared = claimed & quoted
+        if len(shared) / len(claimed) >= min_overlap:
+            return True
+        return (
+            len(quoted) >= MIN_SPAN_WORDS_FOR_REVERSE
+            and len(shared) / len(quoted) >= min_overlap
+        )
 
 
 class Problem(Grounded):
@@ -215,7 +251,11 @@ class JobBrief(BaseModel):
     company: str = ""
     role: str = ""
     seniority: str = ""
-    recruiter_email: str = ""     # verbatim only; verified in code, never trusted
+    # Extracted from the posting by `engine.contact`, never asked of the model.
+    # `email_candidates` is every address found, best first, so the human gate
+    # can offer the alternatives instead of the system pretending to be sure.
+    recruiter_email: str = ""
+    email_candidates: list[str] = Field(default_factory=list)
 
     role_narrative: str = ""      # synthesis — may never be cited as a requirement
     problems_to_solve: list[Problem] = Field(default_factory=list)
@@ -231,6 +271,41 @@ class JobBrief(BaseModel):
 
     excerpt: str = ""             # passed to the planner instead of the full posting
     source_hash: str = ""
+
+
+# ── Outreach ──────────────────────────────────────────────────────────
+
+class Outreach(BaseModel):
+    """The message, before a human has seen it. S8.
+
+    `recipient` is NOT from the model. It comes from `engine.contact`, which
+    reads addresses out of the posting with a regex — the same decision as
+    `JobBrief.recruiter_email`, for the same reason: an address is not
+    judgment, and a field the model can fill is a field it can invent. The
+    whole ranked `recipient_candidates` list travels alongside so the gate can
+    offer the alternatives instead of the system pretending to be certain.
+
+    `cites` is what makes the body checkable. Every specific claim names the
+    bullet it came from, so a reviewer can follow a sentence back to the line
+    on the resume that supports it, and `engine.message` can refuse a draft
+    whose claims are not there.
+
+    Nothing here is sent. S9 is a human gate and S11 will not dispatch without
+    it — the recipient, subject and body all remain editable until then, which
+    is why they are plain strings rather than anything validated into a shape.
+    """
+    recipient: str = ""
+    recipient_candidates: list[str] = Field(default_factory=list)
+    subject: str = ""
+    body: str = ""
+    cites: list[str] = Field(default_factory=list)
+
+    # Set by `engine.message.check`, carried so the gate can show them.
+    problems: list[str] = Field(default_factory=list)
+
+    @property
+    def is_clean(self) -> bool:
+        return not self.problems
 
 
 # ── Evidence ──────────────────────────────────────────────────────────

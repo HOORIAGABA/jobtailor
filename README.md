@@ -2,84 +2,169 @@
 
 [![CI](https://github.com/HOORIAGABA/jobtailor/actions/workflows/ci.yml/badge.svg)](https://github.com/HOORIAGABA/jobtailor/actions/workflows/ci.yml)
 
-**An agentic resume-tailoring system that can prove it didn't make anything up.**
+**A resume-tailoring system that can prove it didn't make anything up.**
 
 Give it a job posting and your resume. It studies the role, rewrites your resume
 for it, drafts the recruiter email — and shows you exactly what it changed, why,
 and which line of your own resume each change came from. Nothing is sent until
-you confirm the recipient, subject and body yourself.
+you have read it and pressed Approve.
 
-**Repo:** https://github.com/HOORIAGABA/jobtailor
+The one thing it refuses to do is invent. If the posting wants Kubernetes and
+your resume has never mentioned Kubernetes, it reports a gap. It does not
+quietly add "exposure to Kubernetes" to your skills. **That refusal is enforced
+by rules in Python, not by asking a model nicely** — and the architecture is
+built around making it checkable.
 
 ## Status
 
-**209 tests, 0.5s, no API key.**
+**951 tests, 5 eval cases, 3 architecture contracts — and not one of them needs
+an API key.**
 
-Every guarantee the product advertises is enforced in deterministic Python and
-asserted without calling a model — including an end-to-end test that runs a
-resume and a plan through normalize → validate → apply → diff and checks that
-nothing was fabricated and nothing was lost.
+Every stage S0.1 → S11 is built: parse, confirm, brief, evidence, plan, write,
+validate, apply, diff, outreach, render, approve, send. Google sign-in,
+Gmail sending, and a four-screen frontend are in.
 
-| Phase | State |
-|---|---|
-| Domain model + operations | done |
-| Engine — normalize, validate, apply, diff | done |
-| Engine — evidence matching | done |
-| LLM client, schema conversion, budget | done |
-| Agents — job brief, planner, writer | **done** |
-| Pipeline (LangGraph), API, UI | next |
-| Agents (brief, planner, writer) | — |
-| Pipeline (LangGraph + checkpointing) | — |
-| API + UI (diff view, approval gate) | — |
-| Evals + tracing + deploy | — |
+| part | state |
+| --- | --- |
+| Domain model + typed operations | done |
+| Engine — normalize, validate, apply, diff, ATS | done |
+| Engine — evidence matching, three-grade standing | done |
+| Agents — parse, brief, planner, writer, outreach | done |
+| Pipeline, persistence, run log | done |
+| ★ Approval gate (S9) + sending (S11) | done |
+| Google sign-in, Gmail API, encrypted tokens | done |
+| Frontend — upload, confirm, gate, send | done |
+| Evals + CI + deployment config | done |
+| Sent by Gmail against a live account | not yet |
 
-## Architecture in one line
+## The one idea
 
-The model proposes **typed edit operations**; deterministic Python validates and
-applies them. 4 LLM calls per run; 11 of 15 stages are plain code.
+**The model never returns a resume.** It returns typed edit operations —
+`RewriteBullet(bullet_id="exp.1.b.2", text="…", rationale="…")` — and
+deterministic Python validates each one before anything is applied.
 
 ```
-resume ─► parse ─► [confirm] ─┐
-                              ├─► evidence ─► plan ─► write
-posting ─► brief ─────────────┘                        │
-                                                       ▼
-                                   validate ─► apply ─► diff
-                                                       │
-                              [you approve] ◄──────────┘
-                                     │
-                              render ─► send
+tailored = base + validated operations
 ```
+
+Everything else falls out of that. The diff is free, because an operation
+already names its target and its reason. The check is local, because you compare
+one new sentence against one old line. Reverting one change is free. The audit
+trail is free.
+
+```
+resume ─► extract ─► parse ─► normalize ─► ★ you confirm the parse
+                                                      │
+posting ─► brief ─► evidence ─────────────────────────┤
+                                                      ▼
+                          plan ─► write ─► ★ validate ─► apply ─► diff
+                                                      │
+                                     outreach ─► render
+                                                      │
+                                      ★ you approve ──┴─► send
+```
+
+Seven model calls. Five deterministic stages between them. One human gate before
+anything leaves the machine.
+
+## How the honesty guarantee works
+
+Claims are not all the same, so they are not checked the same way:
+
+| class | example | the rule |
+| --- | --- | --- |
+| **A** asserted fact | "reduced latency 40%" | must appear **verbatim** in the original line. No inference. |
+| **B** framing | "built" → "owned" | must be entailed by cited evidence; must not escalate seniority or just inject keywords. |
+| **C** named capability | "Airflow" | must exist somewhere in your resume. |
+
+`.importlinter` enforces in CI that `engine` and `domain` **cannot import** an
+LLM client, `httpx`, or `sqlalchemy`. That is what makes "the guard is
+deterministic" a fact a machine checks rather than a claim in a README.
+
+**There is no score anywhere** — no match percentage, no coverage number. A
+number that rises when keywords are inserted makes keyword stuffing the optimal
+strategy, and the model being measured is the one doing the inserting.
 
 ## See it work
 
 ```bash
-python scripts/try_it.py
+python -m scripts.eval -v      # 5 cases, zero API calls
 ```
 
-Runs a sample resume and job posting through the whole chain — job brief,
-evidence matching, planning, writing, validation, diff — and prints what the
-validator refused and why. Three model calls, ~15k tokens.
+Each case runs a resume and a posting through the real pipeline with a scripted
+model, and reports what the validator refused:
 
-## Running locally
+```
+pass  fabricated_number
+      refused    fabricated_numberx1
+      applied    flag_gapx1, set_summaryx1
+      gaps       Kubernetes
+      standing   shown 2 / claimed 0 / absent 2
+      render     verified
+```
+
+One of the five exists to stop the suite lying: `honest_rewrite` asserts that a
+*grounded* rewrite is **accepted**, because the other four are all satisfied by
+a validator that refuses everything.
+
+## Running it
 
 ```bash
-python -m venv .venv && .venv/Scripts/activate      # Windows
+python -m venv .venv && .venv\Scripts\activate      # Windows
 pip install -r requirements.txt
 cp .env.example .env                                 # then fill it in
+python -m scripts.keys                               # the three signing keys
+python -m alembic upgrade head
+
 pytest -q
+python -m uvicorn app.api.main:app --reload --port 8000
 ```
 
-The stack is identical locally and in production — same model, same libraries,
-same database engine. Only `.env` values differ.
+And the interface:
+
+```bash
+cd web && npm install && npm run dev
+```
+
+Open <http://localhost:3000>. `GET http://localhost:8000/` reports whether the
+database, the model and sign-in are configured, and names the fix for each one
+that is not.
+
+**The model can be local and free.** Ollama supports grammar-constrained
+generation, so the schema restricts the sampler token by token and the model
+*cannot* emit malformed JSON. See `.env.example` — including the trap where
+Ollama silently truncates a prompt longer than its context window.
+
+## Deploying
+
+`DEPLOY.md` has the full runbook. The short version: the UI goes on Vercel, the
+API on Render, the database on Neon — all free — and the public instance serves
+runs that already happened rather than pretending it can start new ones. A run
+takes minutes, no HTTP request survives that, and the model that makes it cheap
+is on a laptop the internet cannot reach.
 
 ## Layering
 
 ```
-api → pipeline → io → agents → engine → domain
+api → pipeline → agents → io → db → engine → domain
 ```
 
-Enforced in CI by `.importlinter`: `engine` and `domain` cannot import an LLM
-client. That is what keeps correctness in code you can test without an API key.
+## What is written down
+
+`claude/SYSTEM-GUIDE.md` is the complete walkthrough — every stage, every
+connection, and an honest inventory of what is still weak. It includes the bugs
+that shaped the design, because most of the non-obvious decisions here exist
+because something broke:
+
+- a **Barista entry scored 60 against an ML Engineer's 47**, because term
+  matching used substrings and `ml` matched `html`;
+- the keyword-stuffing check **rewarded exactly what it existed to catch** —
+  appending lowers set similarity, so the longer the keyword list the more
+  "changed" the sentence scored;
+- the approval token was verified against the *submitted* text, which made an
+  editable draft impossible to approve — **the test passed and the product did
+  not work**, because the test forged a token with the server secret;
+- `POST /api/runs {"job": ".env"}` returned the secrets file.
 
 ## License
 

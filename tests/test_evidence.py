@@ -357,3 +357,87 @@ def test_a_declared_skill_is_still_not_reported_as_a_gap():
 def test_the_summary_is_not_evidence_either():
     from app.engine.evidence import NON_EVIDENCE_KINDS
     assert NON_EVIDENCE_KINDS == {"skills", "summary"}
+
+
+# ── how confident the gap list may sound ──────────────────────────────
+# The old list stated "Airflow: gap" as a fact. Lexical matching cannot know
+# that — it knows only that no bullet NAMED Airflow. A bullet reading "built
+# nightly jobs with dependency handling and retries" demonstrates exactly that
+# capability and produces no link, so the candidate was told to add something
+# they already had.
+
+def standing_fixture():
+    from app.domain.models import (
+        JobBrief, RawEntry, RawResume, RawSection, Term,
+    )
+    from app.engine.normalize import normalize
+
+    brief = JobBrief(
+        role="MLE", company="N", excerpt="Required: Airflow, Python, PyTorch.",
+        source_hash="x",
+        terms=[
+            Term(term="Airflow", weight=9, kind="tool", required=True),
+            Term(term="Python", weight=9, kind="skill", required=True),
+            Term(term="PyTorch", weight=8, kind="tool", required=True),
+        ],
+    )
+    doc = normalize(RawResume(sections=[
+        RawSection(heading="EXPERIENCE", entries=[RawEntry(title="DE", bullets=[
+            "Trained models in PyTorch on 57K paired images",
+            "Built nightly jobs with dependency handling and automatic retries",
+        ])]),
+        RawSection(heading="SKILLS", entries=[
+            RawEntry(bullets=["Languages: Python, SQL"])]),
+    ]))
+    return brief, doc
+
+
+def test_three_grades_not_two():
+    from app.engine.evidence import compute_evidence, terms_by_standing
+    brief, doc = standing_fixture()
+    grouped = terms_by_standing(brief, doc, compute_evidence(brief, doc))
+
+    assert grouped["demonstrated"] == ["PyTorch"]
+    assert grouped["declared_only"] == ["Python"]
+    assert grouped["not_found"] == ["Airflow"]
+
+
+def test_a_declared_skill_is_never_graded_as_demonstrated():
+    """The distinction this whole module exists to keep.
+
+    A declared skill is deliberately kept out of `unmatched_elements` so it is
+    not reported as a gap — so "absent from unmatched" must NOT be read as
+    evidence, or every declared skill grades as demonstrated.
+    """
+    from app.engine.evidence import compute_evidence, term_standing
+    brief, doc = standing_fixture()
+    assert term_standing(brief, doc, compute_evidence(brief, doc))["Python"] \
+        == "declared_only"
+
+
+def test_not_found_is_the_grade_for_an_unnamed_capability():
+    """The bullet demonstrates orchestration but never says "Airflow".
+
+    `not_found` says what lexical matching actually established: this matcher
+    did not find it. That is a prompt to look, not a verdict that it is absent.
+    """
+    from app.engine.evidence import compute_evidence, term_standing
+    brief, doc = standing_fixture()
+    assert term_standing(brief, doc, compute_evidence(brief, doc))["Airflow"] \
+        == "not_found"
+
+
+def test_every_term_gets_exactly_one_grade():
+    from app.engine.evidence import compute_evidence, terms_by_standing
+    brief, doc = standing_fixture()
+    grouped = terms_by_standing(brief, doc, compute_evidence(brief, doc))
+    flat = [t for terms in grouped.values() for t in terms]
+    assert sorted(flat) == sorted(t.term for t in brief.terms)
+    assert len(flat) == len(set(flat))
+
+
+def test_the_old_flat_list_still_works_for_callers_that_want_it():
+    from app.engine.evidence import compute_evidence, undemonstrated_terms
+    brief, doc = standing_fixture()
+    assert undemonstrated_terms(brief, doc and compute_evidence(brief, doc)) \
+        == ["Airflow"]

@@ -1,0 +1,30 @@
+AI Engineer
+
+Note: Only candidates with relevant experience will be considered.
+
+We are looking to hire an AI Engineer to join our team on a full-time, onsite basis.  
+
+Job Details:
+Position: AI Engineer
+Experience: Minimum 6 months of relevant experience
+Employment Type: Onsite, G-13, Islamabad (Accommodation available)
+Working Hours: 9:00 PM – 6:00 AM  
+
+Required Technical Skills:
+
+Strong proficiency in Python
+Experience with FastAPI and building REST APIs
+Hands-on experience with n8n and workflow automation
+Experience developing or integrating AI calling/voice agents
+Familiarity with AI APIs, automation, and third-party integrations is a plus  
+
+Soft Skills
+Excellent spoken and written English
+Strong communication and interpersonal skills
+Good problem-solving and analytical abilities
+Strong attention to detail and willingness to learn  
+
+If you have hands-on experience building AI-powered solutions and are excited to work in a fast-paced environment, we would love to hear from you.  
+
+How to Apply:
+Send your CV to admin@annovasol.com

@@ -276,3 +276,119 @@ def test_a_slash_in_a_model_id_is_valid():
     assert check(Settings(llm_provider="openai", llm_api_key="k",
                           llm_model="antigravity/gemini-3.7-flash-medium",
                           llm_base_url=BASE)) == []
+
+
+# ── reasoning effort ──────────────────────────────────────────────────
+# Measured on one 7,660-char resume: gpt-oss-120b-medium spent 15,320 tokens
+# and never finished the JSON; a non-reasoning model did the same work in
+# 2,312. Extraction has one correct answer, so the thinking is pure cost.
+
+def _capture_body() -> tuple[dict, object]:
+    """A handler that records the request body it was sent."""
+    seen: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.update(json.loads(request.content))
+        return httpx.Response(200, json=_ok())
+
+    return seen, handler
+
+
+def test_reasoning_effort_is_sent_when_configured():
+    seen, handler = _capture_body()
+    _client(handler, reasoning_effort="low").complete(system="s", user="u")
+    assert seen["reasoning_effort"] == "low"
+
+
+def test_reasoning_effort_is_omitted_by_default():
+    """A provider that does not know the field may reject the whole request."""
+    seen, handler = _capture_body()
+    _client(handler).complete(system="s", user="u")
+    assert "reasoning_effort" not in seen
+
+
+def test_the_setting_reaches_the_client():
+    from app.io.llm import build_client
+    client = build_client(Settings(llm_provider="groq", llm_api_key="k",
+                                   llm_model="openai/gpt-oss-120b",
+                                   llm_base_url=BASE,
+                                   llm_reasoning_effort="low"))
+    assert client._reasoning_effort == "low"
+
+
+# ── a slow local model is not a broken one ────────────────────────────
+# Measured on llama3.1:8b through Ollama on a laptop GPU: ~30 tok/s prompt
+# processing and ~11.9 tok/s generation, so one parse window (1,325 in, ~700
+# out) takes about 103 seconds. The prompt processing ALONE was 44s, which
+# exhausted the old 45s timeout before the model wrote a character.
+
+def test_a_timeout_says_it_is_slowness_not_a_fault():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ReadTimeout("timed out")
+
+    with pytest.raises(LLMUnavailable) as excinfo:
+        _client(handler).complete(system="s", user="u")
+
+    message = str(excinfo.value)
+    assert "timed out after" in message
+    assert "LLM_TIMEOUT_SECONDS" in message
+    assert "ollama ps" in message           # names the CPU-vs-GPU check
+
+
+def test_the_default_timeout_fits_a_local_model():
+    """45s was fine for a hosted API and far too short for a local one."""
+    assert Settings().llm_timeout_seconds >= 120
+
+
+def test_a_non_timeout_failure_keeps_its_own_message():
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("connection refused")
+
+    with pytest.raises(LLMUnavailable) as excinfo:
+        _client(handler).complete(system="s", user="u")
+    assert "timed out after" not in str(excinfo.value)
+
+
+# ── a split configuration inherits the base URL ───────────────────────
+# Real failure: SMART_LLM_MODEL was set to a hosted model, SMART_LLM_BASE_URL
+# was left empty, so the request went to the local Ollama — which answered 404
+# naming a model it was never going to have.
+
+def test_a_404_names_the_endpoint_and_the_inherited_base_url():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(404, json={"error": {"message": "model not found"}})
+
+    with pytest.raises(LLMUnavailable) as excinfo:
+        _client(handler).complete(system="s", user="u")
+
+    message = str(excinfo.value)
+    assert BASE in message                      # WHERE it asked
+    assert "SMART_LLM_BASE_URL" in message      # the likely cause
+    assert "ollama list" in message             # how to check a local tag
+
+
+def test_a_hosted_smart_model_against_a_local_base_url_is_refused():
+    problems = check(Settings(
+        llm_provider="ollama", llm_model="llama3.1:8b",
+        llm_base_url="http://localhost:11434/v1",
+        smart_llm_model="huggingchat/deepseek-ai/DeepSeek-V4-Flash",
+    ))
+    assert any("SMART_LLM_BASE_URL" in p for p in problems)
+
+
+def test_setting_the_smart_base_url_clears_it():
+    assert check(Settings(
+        llm_provider="ollama", llm_model="llama3.1:8b",
+        llm_base_url="http://localhost:11434/v1",
+        smart_llm_model="huggingchat/deepseek-ai/DeepSeek-V4-Flash",
+        smart_llm_base_url="http://localhost:20128/v1",
+    )) == []
+
+
+def test_a_local_smart_model_on_a_local_base_url_is_fine():
+    """A bigger Ollama tag is a legitimate split with no base URL change."""
+    assert check(Settings(
+        llm_provider="ollama", llm_model="qwen3:4b",
+        llm_base_url="http://localhost:11434/v1",
+        smart_llm_model="llama3.1:8b",
+    )) == []

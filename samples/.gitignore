@@ -1,0 +1,14 @@
+# Everything in this folder is ignored except the synthetic samples below.
+#
+# This is deliberate and it is the second time: v1 kept a folder of real resume
+# PDFs at the repo root that .gitignore did not cover, one `git add -A` away
+# from being public. A resume is a name, an address, a phone number and an
+# employment history. Default to not committing it.
+*
+
+# Regenerate these with: python scripts/make_samples.py
+!.gitignore
+!README.md
+!two_column.pdf
+!single_column.pdf
+!table_layout.docx

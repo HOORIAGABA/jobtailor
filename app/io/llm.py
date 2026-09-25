@@ -18,6 +18,7 @@ import json
 import logging
 import random
 import re
+import itertools
 import time
 from dataclasses import dataclass, field
 from typing import Any, Protocol
@@ -34,10 +35,27 @@ class LLMResponse:
     text: str
     prompt_tokens: int = 0
     completion_tokens: int = 0
+    # Why the model stopped. "length" means the answer was CUT OFF at the
+    # token ceiling, and it is the difference between a real diagnosis and a
+    # wild goose chase: truncated JSON fails schema validation, so without
+    # this field the system reports "the model would not follow the schema"
+    # when the model was following it perfectly and simply ran out of room.
+    # Measured: a 7,660-character resume was cut at exactly the 4,213-token
+    # ceiling, twice, and reported itself as a schema problem both times.
+    finish_reason: str = ""
 
     @property
     def total_tokens(self) -> int:
         return self.prompt_tokens + self.completion_tokens
+
+    @property
+    def was_truncated(self) -> bool:
+        return self.finish_reason.lower() in ("length", "max_tokens")
+
+
+# One counter for the process. Ordering across two clients is the whole point,
+# so it cannot live on a client.
+_CALL_SEQUENCE = itertools.count()
 
 
 class LLMClient(Protocol):
@@ -126,6 +144,7 @@ class GoogleClient:
                     text=response.text or "",
                     prompt_tokens=getattr(usage, "prompt_token_count", 0) or 0,
                     completion_tokens=getattr(usage, "candidates_token_count", 0) or 0,
+                    finish_reason=_google_finish_reason(response),
                 )
             except Exception as exc:                      # noqa: BLE001
                 last = exc
@@ -258,6 +277,21 @@ class BudgetedClient:
                 f"(limit {self.budget.max_calls}); refusing to start {stage or 'another'}"
             )
 
+        # Ordering and duration are two different questions, and only one of
+        # them is a clock question.
+        #
+        # `started` alone was used for both, and on Windows `time.monotonic()`
+        # advances in ~15.6 ms steps — so five calls that complete in
+        # microseconds all record the SAME value, the merge sort finds every key
+        # equal, and a stable sort leaves the entries grouped by client rather
+        # than interleaved. The run log then claims an order the calls did not
+        # happen in, which is worse than claiming none: someone reading it to
+        # work out which stage failed first is reading fiction.
+        #
+        # A sequence number is exact on every platform and costs nothing.
+        # `next()` on an `itertools.count` is a single C call, so it is atomic
+        # under the GIL and needs no lock of its own.
+        sequence = next(_CALL_SEQUENCE)
         started = time.monotonic()
         response = self._inner.complete(
             system=system, user=user, schema=schema,
@@ -266,6 +300,10 @@ class BudgetedClient:
         self.budget.record(response)
         self.log.append({
             "stage": stage,
+            # So two clients sharing a run can have their logs merged back
+            # into the order the calls actually happened in.
+            "seq": sequence,
+            "started": started,
             "prompt_tokens": response.prompt_tokens,
             "completion_tokens": response.completion_tokens,
             "ms": round((time.monotonic() - started) * 1000),
@@ -276,6 +314,35 @@ class BudgetedClient:
                 f"run used {self.budget.tokens} tokens (limit {self.budget.max_tokens})"
             )
         return response
+
+
+def merged_call_log(*clients: Any) -> list[dict[str, Any]]:
+    """Every call from every client, in the order they happened.
+
+    A run with a separate smart model has two `BudgetedClient`s sharing one
+    `RunBudget`, so the budget counts both while `client.log` holds one. A
+    manifest once said `calls: 5` beside three entries, and the two missing
+    were the two that failed.
+
+    `BudgetedClient` records a `seq` for exactly this, which is why the merge is
+    a sort and not a concatenation. It lives here, beside the thing that writes
+    those entries, because two callers needed it and the second one
+    reimplemented it.
+
+    Sorted on `seq`, with `started` as the fallback so a log read back from an
+    older run — a seeded folder, a stored manifest — still merges. Those entries
+    have no sequence number and never will.
+    """
+    seen: set[int] = set()
+    entries: list[dict[str, Any]] = []
+    for client in clients:
+        log = getattr(client, "log", None)
+        if log is None or id(client) in seen:
+            continue
+        seen.add(id(client))
+        entries.extend(log)
+    return sorted(entries,
+                  key=lambda e: (e.get("seq", -1), e.get("started", 0.0)))
 
 
 # ── Test double ───────────────────────────────────────────────────────
@@ -326,7 +393,7 @@ class OpenAICompatibleClient:
     MAX_ATTEMPTS = 3
 
     def __init__(self, api_key: str, model: str, base_url: str,
-                 timeout: float = 45.0) -> None:
+                 timeout: float = 45.0, reasoning_effort: str = "") -> None:
         if not model:
             raise LLMUnavailable("LLM_MODEL is empty.")
         if not base_url:
@@ -338,6 +405,16 @@ class OpenAICompatibleClient:
         self._model_name = model
         self._url = base_url.strip().rstrip("/") + "/chat/completions"
         self._timeout = timeout
+        # Reasoning models emit a thinking channel BEFORE the answer, and on
+        # most gateways those tokens come out of `max_tokens`. Measured on one
+        # 7,660-character resume: gpt-oss-120b-medium spent 15,320 tokens and
+        # never finished the JSON, while a non-reasoning model did the same
+        # work in 2,312. Extraction has one correct answer — there is nothing
+        # there worth thinking about — so the effort is worth turning down.
+        #
+        # Sent only when set, because a provider that does not know the field
+        # may reject the whole request.
+        self._reasoning_effort = (reasoning_effort or "").strip().lower()
         # Remembered per client so the ladder below is climbed once, not once
         # per call.
         self._schema_mode: str | None = None
@@ -369,6 +446,8 @@ class OpenAICompatibleClient:
                 }
                 if fmt := _response_format(mode, schema):
                     body["response_format"] = fmt
+                if self._reasoning_effort:
+                    body["reasoning_effort"] = self._reasoning_effort
 
                 try:
                     resp = httpx.post(self._url, headers=headers, json=body,
@@ -387,6 +466,23 @@ class OpenAICompatibleClient:
                     logger.info("%s rejected response_format=%s; degrading",
                                 self._model_name, mode)
                     continue
+
+                if resp.status_code == 404:
+                    # "model not found" almost never means the model is gone.
+                    # It means the request went to the wrong endpoint — and
+                    # with a split main/smart configuration the base URL is
+                    # INHERITED when SMART_LLM_BASE_URL is left empty, so a
+                    # hosted model id gets asked of a local Ollama.
+                    raise LLMUnavailable(
+                        f"{self._url} has no model named {self._model_name!r}.\n"
+                        f"  The model id and the endpoint have to match. If "
+                        f"this is the judgment model, SMART_LLM_BASE_URL is "
+                        f"empty, so it inherited LLM_BASE_URL above — set it "
+                        f"to the endpoint that actually serves "
+                        f"{self._model_name!r}.\n"
+                        f"  For a local Ollama model, `ollama list` shows the "
+                        f"exact tags it has."
+                    )
 
                 if resp.status_code >= 400:
                     raise LLMUnavailable(
@@ -410,6 +506,16 @@ class OpenAICompatibleClient:
                 f"{self._model_name} is rate limited"
                 + (f"; the provider asked for {wait:.0f}s" if wait else "")
                 + f". Gave up after {self.MAX_ATTEMPTS} attempts."
+            ) from last
+        if isinstance(last, httpx.TimeoutException):
+            raise LLMUnavailable(
+                f"Call to {self._model_name!r} at {self._url} timed out after "
+                f"{self._timeout:.0f}s.\n"
+                f"  A local model is slow, not broken: an 8B model on a laptop "
+                f"GPU needs roughly 100 seconds for one parse window. Raise "
+                f"LLM_TIMEOUT_SECONDS, or run a smaller model.\n"
+                f"  If it is far slower than that, Ollama is probably on the "
+                f"CPU — `ollama ps` shows a PROCESSOR column."
             ) from last
         raise LLMUnavailable(
             f"Call to {self._model_name!r} at {self._url} failed: {last}"
@@ -443,16 +549,31 @@ def _response_format(mode: str, schema: dict[str, Any] | None) -> dict | None:
     return None
 
 
+def _google_finish_reason(response) -> str:
+    """Google names it MAX_TOKENS on the candidate, not `finish_reason`."""
+    try:
+        reason = response.candidates[0].finish_reason
+    except (AttributeError, IndexError, TypeError):
+        return ""
+    name = getattr(reason, "name", None) or str(reason)
+    return "length" if "MAX_TOKENS" in name.upper() else name.lower()
+
+
 def _parse_openai_response(data: dict) -> LLMResponse:
     try:
         text = data["choices"][0]["message"]["content"] or ""
     except (KeyError, IndexError, TypeError) as exc:
         raise LLMUnavailable(f"Unexpected response shape: {str(data)[:200]}") from exc
     usage = data.get("usage") or {}
+    try:
+        finish = str(data["choices"][0].get("finish_reason") or "")
+    except (KeyError, IndexError, TypeError):
+        finish = ""
     return LLMResponse(
         text=text,
         prompt_tokens=int(usage.get("prompt_tokens") or 0),
         completion_tokens=int(usage.get("completion_tokens") or 0),
+        finish_reason=finish,
     )
 
 
@@ -474,8 +595,15 @@ _OPENAI_COMPATIBLE = frozenset({
 })
 
 
-def build_client(settings) -> LLMClient:
-    """Construct the configured provider. One switch, one place."""
+def build_client(settings, role: str = "main") -> LLMClient:
+    """Construct the configured provider. One switch, one place.
+
+    `role="smart"` selects the SMART_LLM_* settings when they are configured,
+    so the judgment stages can run on a different model from the parse. See
+    `Settings.for_role`.
+    """
+    if role != "main" and hasattr(settings, "for_role"):
+        settings = settings.for_role(role)
     provider = (settings.llm_provider or "google").strip().lower()
 
     if provider == "google":
@@ -491,6 +619,7 @@ def build_client(settings) -> LLMClient:
             model=settings.llm_model,
             base_url=settings.llm_base_url,
             timeout=settings.llm_timeout_seconds,
+            reasoning_effort=settings.llm_reasoning_effort,
         )
 
     raise LLMUnavailable(

@@ -23,6 +23,7 @@ from app.domain.ops import (
     ReorderItems, RewriteBullet, SetSkills, SetSummary,
 )
 from app.domain.ids import section_id
+from app.engine.normalize import existing_skills, skill_key
 
 
 def apply_ops(base: ResumeDoc, ops: list[Op]) -> ResumeDoc:
@@ -107,10 +108,20 @@ def _promote_item(doc: ResumeDoc, op: PromoteItem) -> None:
 
 
 def _set_skills(doc: ResumeDoc, op: SetSkills) -> None:
-    """Replace the skills section with the grouped version.
+    """Rewrite the skills section as the grouped version.
 
     Each group becomes one entry printed as `Label: a, b, c` — the shape a
     resume actually uses. A skills section is created if the document had none.
+
+    **The resume's own spelling wins.** The planner reads a normalised,
+    lowercased inventory, so it proposes `python fastapi` and `n8n` where the
+    page says `Python FastAPI`. Echoing that back would quietly downcase a
+    candidate's resume, so every proposed skill that already exists is restored
+    to the form the document prints. Only genuinely new skills keep the
+    planner's spelling.
+
+    This is presentation, not permission: the validator has already decided
+    which skills may appear (`_check_set_skills`).
     """
     groups = [g for g in op.groups if g.skills]
     if not groups:
@@ -121,13 +132,16 @@ def _set_skills(doc: ResumeDoc, op: SetSkills) -> None:
         section = Section(id=section_id("skills"), kind="skills", heading="SKILLS")
         doc.sections.append(section)
 
+    as_written = existing_skills(doc)
+
     items: list[Item] = []
     for group in groups:
         iid = item_id("skills", doc.next_seq())
+        skills = [as_written.get(skill_key(s), s) for s in group.skills]
         items.append(Item(
             id=iid,
             title=group.label,
-            bullets=[Bullet(id=bullet_id(iid, 1), text=", ".join(group.skills))],
+            bullets=[Bullet(id=bullet_id(iid, 1), text=", ".join(skills))],
         ))
     section.items = items
 

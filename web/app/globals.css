@@ -1,0 +1,97 @@
+@import "tailwindcss";
+
+/*
+  One set of tokens, defined light and redefined for dark. The product is a
+  document tool, so the palette is paper-and-ink: a warm neutral ground, one
+  accent for actions, and colour reserved for status — where it is the
+  information, not decoration.
+*/
+@theme {
+  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
+    "Helvetica Neue", Arial, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+}
+
+:root {
+  --ground: #faf9f7;
+  --surface: #ffffff;
+  --line: #e5e2dd;
+  --ink: #1c1917;
+  --ink-soft: #57534e;
+  --ink-faint: #8a827a;
+  --accent: #1d4ed8;
+  --accent-ink: #ffffff;
+  --good: #15803d;
+  --warn: #a16207;
+  --bad: #b91c1c;
+  --good-bg: #ecfdf3;
+  --warn-bg: #fefce8;
+  --bad-bg: #fef2f2;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --ground: #17161a;
+    --surface: #1f1e23;
+    --line: #35333a;
+    --ink: #f4f2ef;
+    --ink-soft: #b5b0a9;
+    --ink-faint: #8b857e;
+    --accent: #7ba2ff;
+    --accent-ink: #12121a;
+    --good: #6ee7a8;
+    --warn: #fbc95c;
+    --bad: #fca5a5;
+    --good-bg: #10281c;
+    --warn-bg: #2a2413;
+    --bad-bg: #2b1616;
+  }
+}
+
+:root[data-theme="dark"] {
+  --ground: #17161a;
+  --surface: #1f1e23;
+  --line: #35333a;
+  --ink: #f4f2ef;
+  --ink-soft: #b5b0a9;
+  --ink-faint: #8b857e;
+  --accent: #7ba2ff;
+  --accent-ink: #12121a;
+  --good: #6ee7a8;
+  --warn: #fbc95c;
+  --bad: #fca5a5;
+  --good-bg: #10281c;
+  --warn-bg: #2a2413;
+  --bad-bg: #2b1616;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--ground);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Focus is never removed, only restyled: this is a form-heavy product and the
+   keyboard path through it has to be visible. */
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+
+input,
+textarea,
+select,
+button {
+  font: inherit;
+  color: inherit;
+}
+
+textarea {
+  field-sizing: content;
+}

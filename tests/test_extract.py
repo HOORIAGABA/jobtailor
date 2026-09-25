@@ -230,3 +230,129 @@ def test_a_near_empty_document_is_refused_rather_than_guessed_at():
 def test_suffix_is_case_insensitive():
     assert suffix_of("Resume.PDF") == ".pdf"
     assert extract_text(SAMPLE_TXT.encode(), "RESUME.TXT")
+
+
+# ── artifacts seen on a real resume ───────────────────────────────────
+# Everything below was found by running scripts/parse_resume.py --text-only on
+# an actual two-page Europass CV, not invented.
+
+def test_markdown_links_keep_the_label_and_drop_the_target():
+    """Some readers emit `[label](url)` for a link annotation.
+
+    On a resume the target is a URL-ified copy of the label, so keeping both
+    doubles the text and gives the parser two candidates for one field.
+    """
+    raw = (
+        "CONTACT\nLinkedIn: [www.linkedin.com/in/hooria-attas]"
+        "(https://www.linkedin.com/in/hooria-attas)\n"
+        "Website [www.ist.edu.pk](https://www.ist.edu.pk)\n"
+    )
+    text = extract_text((raw + SAMPLE_TXT).encode(), "r.txt")
+    assert "LinkedIn: www.linkedin.com/in/hooria-attas" in text
+    assert "Website www.ist.edu.pk" in text
+    assert "](" not in text and "https://" not in text
+
+
+def test_an_invisible_character_does_not_survive_as_a_blank_line():
+    """A zero-width space is not whitespace to Python.
+
+    So `" ".join(line.split())` leaves it as a non-empty line, the blank-run
+    collapse never fires, and the extracted resume comes out double-spaced.
+    """
+    raw = "EXPERIENCE\n\n​\n\nData Analyst\n" + SAMPLE_TXT
+    text = extract_text(raw.encode(), "r.txt")
+    assert "​" not in text
+    assert "\n\n\n" not in text
+
+
+def test_a_soft_hyphen_is_removed():
+    raw = "EXPERIENCE\nBuilt a pipe­line for reporting\n" + SAMPLE_TXT
+    assert "pipeline" in extract_text(raw.encode(), "r.txt")
+
+
+# ── wrapped bullets ───────────────────────────────────────────────────
+
+def test_a_bullet_wrapped_across_lines_becomes_one_line():
+    """Three printed lines are one claim.
+
+    Left split, each is a separate chance for the parser to drop half a
+    sentence, and parse_check compares line by line — so a correctly parsed
+    bullet would look like two missing lines.
+    """
+    raw = (
+        "EXPERIENCE\n"
+        "- Designed and deployed a production multi-modal RGB-Thermal\n"
+        "object-detection pipeline achieving 96.5% mAP@50, exported to\n"
+        "ONNX and deployed on NVIDIA Jetson edge hardware.\n"
+        + SAMPLE_TXT
+    )
+    text = extract_text(raw.encode(), "r.txt")
+    joined = [l for l in text.splitlines() if l.startswith("- Designed")]
+    assert len(joined) == 1
+    assert "NVIDIA Jetson edge hardware." in joined[0]
+
+
+def test_separate_bullets_are_not_merged():
+    raw = (
+        "EXPERIENCE\n"
+        "- Diagnosed and resolved critical model-architecture bugs that\n"
+        "blocked production deployment.\n"
+        "- Collaborated with data engineers on reliable data pipelines.\n"
+        + SAMPLE_TXT
+    )
+    bullets = [l for l in extract_text(raw.encode(), "r.txt").splitlines()
+               if l.startswith("- Diagnosed") or l.startswith("- Collaborated")]
+    assert len(bullets) == 2
+    assert bullets[0].endswith("blocked production deployment.")
+    assert "Collaborated" not in bullets[0]
+
+
+def test_a_bullet_does_not_swallow_the_heading_after_it():
+    """The stop condition that keeps unwrapping safe."""
+    raw = (
+        "WORK EXPERIENCE\n"
+        "- Wrote SQL queries for the marketing team and produced the\n"
+        "weekly report.\n"
+        "EDUCATION AND TRAINING\n"
+        "BSc Computer Science\n"
+        + SAMPLE_TXT
+    )
+    text = extract_text(raw.encode(), "r.txt")
+    assert "EDUCATION AND TRAINING" in text.splitlines()
+
+
+def test_a_blank_line_ends_a_bullet():
+    raw = (
+        "EXPERIENCE\n"
+        "- Built a dashboard that reduced manual reporting\n"
+        "\n"
+        "Analytics Intern\n"
+        + SAMPLE_TXT
+    )
+    lines = extract_text(raw.encode(), "r.txt").splitlines()
+    assert "Analytics Intern" in lines
+
+
+def test_numbered_bullets_wrap_too():
+    raw = (
+        "PROJECTS\n"
+        "1. Trained a model to predict customer churn using scikit-learn\n"
+        "and deployed it as a nightly scheduled job.\n"
+        "2. Wrote the evaluation harness.\n"
+        + SAMPLE_TXT
+    )
+    lines = extract_text(raw.encode(), "r.txt").splitlines()
+    assert any(l.startswith("1.") and "nightly scheduled job." in l for l in lines)
+    assert any(l.startswith("2.") for l in lines)
+
+
+def test_prose_without_bullets_is_left_alone():
+    """The summary paragraph must not be glued to the heading above it."""
+    raw = (
+        "ABOUT ME\n"
+        "AI/ML Engineer with hands-on experience in building and deploying\n"
+        "production machine learning systems.\n"
+        + SAMPLE_TXT
+    )
+    lines = extract_text(raw.encode(), "r.txt").splitlines()
+    assert "ABOUT ME" in lines

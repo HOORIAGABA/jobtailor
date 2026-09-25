@@ -56,8 +56,40 @@ class LLMRateLimited(UpstreamError):
     status_code = 429
 
 
-class SchemaValidationFailed(UpstreamError):
+class ModelOutputError(UpstreamError):
+    """A failure whose evidence is the text the model produced.
+
+    Carries `raw` so the pipeline can write it to the run folder. Without it,
+    "the JSON was incomplete" is unactionable: you cannot tell a model that
+    rambled from one that was cut off mid-sentence from one that answered in
+    prose. The response is the artifact, and discarding it on failure throws
+    away the only thing that explains the failure.
+
+    `stage` travels with it so the saved file can be named after the stage
+    rather than its position in the run. A file called `05_model_response.txt`
+    answers the wrong question: the reader knows when it happened and needs to
+    know *which call* it was.
+    """
+
+    def __init__(self, message: str, raw: str = "", stage: str = "") -> None:
+        super().__init__(message)
+        self.raw = raw
+        self.stage = stage
+
+
+class SchemaValidationFailed(ModelOutputError):
     """The model returned something that is not the requested shape, twice."""
+
+
+class ResponseTruncated(ModelOutputError):
+    """The model was still writing when it hit the token ceiling.
+
+    Deliberately NOT a `SchemaValidationFailed`. Truncated JSON fails schema
+    validation, so the two look identical from the outside — and conflating
+    them sends you to rewrite a prompt when the fix is a number. Measured: a
+    7,660-character resume was cut at exactly its 4,213-token ceiling, twice,
+    and reported itself as "the model would not follow the schema" both times.
+    """
 
 
 # ── our fault ─────────────────────────────────────────────────────────

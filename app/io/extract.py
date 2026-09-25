@@ -29,6 +29,7 @@ part. The body is walked element by element instead.
 from __future__ import annotations
 
 import logging
+import re
 from pathlib import PurePosixPath
 
 from app.domain.errors import ExtractionEmpty, UnsupportedFileType
@@ -169,25 +170,89 @@ def _from_plain(data: bytes) -> str:
 
 # ── shared cleanup ────────────────────────────────────────────────────
 
+_MD_LINK = re.compile(r"\[([^\]\n]*)\]\((?:[^)\s]+)\)")
+_BULLET_START = re.compile(r"^[-*]\s+|^\d{1,2}[.)]\s+")
+# A heading: no lowercase letters, or very short and title-shaped. Used only to
+# stop a bullet from swallowing the heading that follows it.
+_HEADINGISH = re.compile(r"^[^a-z]{3,}$")
+
+# Zero-width and formatting characters. These are not whitespace to Python, so
+# a line containing only one survives `" ".join(line.split())` as a non-empty
+# line — which is why a resume came out with double blank lines where the
+# blank-run collapse should have caught them.
+_INVISIBLE = "​‌‍⁠­﻿᠎"
+
+
+def strip_markdown_links(text: str) -> str:
+    """`[label](url)` -> `label`. Keeps the visible text, drops the target.
+
+    Some PDF readers emit markdown for link annotations. The target is almost
+    always a URL-ified copy of the label on a resume ("www.example.com" linking
+    to "https://www.example.com"), so keeping both doubles the text and gives
+    the parser two candidate values for one field.
+    """
+    return _MD_LINK.sub(lambda m: m.group(1).strip() or "", text)
+
+
+def unwrap_bullets(lines: list[str]) -> list[str]:
+    """Rejoin a bullet that the PDF wrapped across several lines.
+
+    A bullet in a PDF is one logical claim printed over two or three lines:
+
+        - Designed and deployed a production multi-modal RGB-Thermal
+        object-detection pipeline achieving 96.5% mAP@50, exported to
+        ONNX and deployed on NVIDIA Jetson edge hardware.
+
+    Left as three lines it becomes three chances for the parser to drop or
+    mangle part of a sentence, and `engine.parse_check` compares line by line,
+    so a correctly parsed single bullet would look like two missing lines.
+
+    A bullet runs until the next bullet, a blank line, or a heading. Those
+    three stops are what keep this from swallowing the section title that
+    follows the last bullet of an entry.
+    """
+    out: list[str] = []
+    in_bullet = False
+
+    for line in lines:
+        if not line:
+            in_bullet = False
+            out.append(line)
+        elif _BULLET_START.match(line):
+            in_bullet = True
+            out.append(line)
+        elif in_bullet and not _HEADINGISH.match(line):
+            out[-1] = f"{out[-1]} {line}"
+        else:
+            in_bullet = False
+            out.append(line)
+
+    return out
+
+
 def _tidy(text: str) -> str:
-    """Normalise whitespace and the characters PDFs are full of.
+    """Normalise the characters and line structure PDFs are full of.
 
     Bullet glyphs become a plain hyphen so the parser sees one bullet marker
     instead of nine, and the ligatures PDF fonts use are expanded — `ﬁ` would
     otherwise make `workflow` unsearchable as `workﬂow`.
     """
     replacements = {
-        " ": " ", " ": " ", " ": " ", "﻿": "",
+        " ": " ", " ": " ", " ": " ",
         "‘": "'", "’": "'", "“": '"', "”": '"',
         "–": "-", "—": "-", "−": "-",
         "ﬁ": "fi", "ﬂ": "fl", "ﬀ": "ff",
         "•": "-", "●": "-", "▪": "-", "·": "-",
         "◦": "-", "⁃": "-", "‣": "-", "∙": "-",
+        **{c: "" for c in _INVISIBLE},
     }
     for bad, good in replacements.items():
         text = text.replace(bad, good)
 
+    text = strip_markdown_links(text)
+
     lines = [" ".join(line.split()) for line in text.splitlines()]
+    lines = unwrap_bullets(lines)
 
     out: list[str] = []
     blanks = 0

@@ -185,3 +185,66 @@ def test_parsed_lines_reaches_every_field():
     assert "R. KHAN" in lines
     assert "Jan 2022 - Present" in lines
     assert "Languages: Python, SQL, JavaScript" in lines
+
+
+# ── structural collapse ───────────────────────────────────────────────
+# Every test below is built from a real failure: three resumes parsed with
+# `sections: []` and the whole document in one field. The word comparison
+# above reported "All 114 lines accounted for", because it measures vocabulary
+# and the failure was shape.
+
+BLOB = RawResume(
+    contact=Contact(full_name="R. KHAN", email="r.khan@example.com"),
+    summary=SOURCE,                       # the entire document, in one field
+    sections=[],
+)
+
+
+def test_a_parse_with_no_sections_is_not_clean():
+    coverage = check_coverage(SOURCE, BLOB)
+    assert not coverage.is_clean
+    assert not coverage.dropped           # every word IS present — that is the trap
+    assert any("no sections" in p for p in coverage.structure)
+
+
+def test_a_field_holding_the_whole_document_is_reported():
+    assert any("collapsed it" in p for p in check_coverage(SOURCE, BLOB).structure)
+
+
+def test_the_summary_leads_with_the_structural_failure():
+    """"All 114 lines accounted for" was the old answer to this input."""
+    text = check_coverage(SOURCE, BLOB).summary()
+    assert "accounted for" not in text
+    assert "no sections" in text
+
+
+def test_sections_with_no_entries_are_reported():
+    parse = faithful()
+    for section in parse.sections:
+        section.entries = []
+    assert any("no entries" in p for p in check_coverage(SOURCE, parse).structure)
+
+
+def test_entries_with_no_bullets_at_all_are_reported():
+    parse = faithful()
+    for section in parse.sections:
+        for entry in section.entries:
+            entry.bullets = []
+    assert any("not one bullet" in p for p in check_coverage(SOURCE, parse).structure)
+
+
+def test_a_faithful_parse_has_no_structural_complaint():
+    assert check_coverage(SOURCE, faithful()).structure == []
+
+
+def test_a_short_document_is_not_judged_on_structure():
+    """A three-line note legitimately has no sections."""
+    short = "R. KHAN\nr.khan@example.com\nAvailable from March.\n"
+    assert check_coverage(short, RawResume()).structure == []
+
+
+def test_one_long_bullet_in_a_real_document_is_not_a_collapse():
+    """The share test must not fire on a resume that happens to have a long
+    bullet — only on a field carrying most of the document."""
+    parse = faithful()
+    assert check_coverage(SOURCE, parse).structure == []

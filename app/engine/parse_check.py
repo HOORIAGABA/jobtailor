@@ -42,27 +42,89 @@ MIN_RETAINED = 0.6
 MIN_WORDS = 3
 
 
+# ── structural collapse ───────────────────────────────────────────────
+# The word comparison below measures VOCABULARY. It is blind to SHAPE, and
+# shape is the other way a parse fails.
+#
+# Measured, on three real resumes: the model returned `sections: []` and put
+# all 7,531 characters of the document into one field. Every source line's
+# words were present, so the check reported "All 114 lines accounted for" —
+# and the document had nothing addressable in it. Perfect retention, zero
+# structure, and a verifier saying everything was fine.
+#
+# So the shape is checked too. A resume that becomes one blob is a failed
+# parse no matter how many of its words survived.
+
+# A single parsed field holding this much of the document is a dumping ground,
+# not a field.
+MAX_FIELD_SHARE = 0.4
+
+# Below this many content lines, a document is too short to draw conclusions
+# from — a one-line note legitimately has no sections.
+MIN_LINES_TO_JUDGE = 8
+
+
 @dataclass(frozen=True)
 class ParseCoverage:
     """What survived the parse, and what did not."""
     dropped: list[str] = field(default_factory=list)
     invented: list[str] = field(default_factory=list)
+    structure: list[str] = field(default_factory=list)
     source_lines: int = 0
     parsed_lines: int = 0
 
     @property
     def is_clean(self) -> bool:
-        return not self.dropped and not self.invented
+        return not self.dropped and not self.invented and not self.structure
 
     def summary(self) -> str:
         if self.is_clean:
             return f"All {self.source_lines} lines accounted for."
         parts = []
+        if self.structure:
+            parts.append(self.structure[0])
         if self.dropped:
             parts.append(f"{len(self.dropped)} line(s) missing from the parse")
         if self.invented:
             parts.append(f"{len(self.invented)} line(s) not in the source")
         return "; ".join(parts)
+
+
+def check_structure(source: list[str], raw: RawResume) -> list[str]:
+    """Did the parse produce a document, or a blob? Reported in plain words."""
+    problems: list[str] = []
+    entries = sum(len(s.entries) for s in raw.sections)
+    bullets = sum(len(e.bullets) for s in raw.sections for e in s.entries)
+
+    if len(source) < MIN_LINES_TO_JUDGE:
+        return problems
+
+    if not raw.sections:
+        problems.append(
+            f"the parse has no sections at all, from {len(source)} lines of text"
+        )
+    elif not entries:
+        problems.append(
+            f"the parse has {len(raw.sections)} section(s) and no entries in any "
+            f"of them"
+        )
+    elif not bullets:
+        problems.append(
+            f"the parse has {entries} entries and not one bullet between them"
+        )
+
+    total = len(set().union(*(content_words(l) for l in source))) if source else 0
+    if total:
+        for line in parsed_lines(raw):
+            share = len(content_words(line)) / total
+            if share > MAX_FIELD_SHARE:
+                problems.append(
+                    f"one field holds {share:.0%} of the document's text — the "
+                    f"parse collapsed it instead of structuring it"
+                )
+                break
+
+    return problems
 
 
 # ── contact fields are checked exactly, not statistically ─────────────
@@ -145,6 +207,7 @@ def check_coverage(source_text: str, raw: RawResume) -> ParseCoverage:
     return ParseCoverage(
         dropped=dropped,
         invented=invented,
+        structure=check_structure(source, raw),
         source_lines=len(source),
         parsed_lines=len(parsed),
     )

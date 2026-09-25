@@ -1,10 +1,29 @@
-﻿name: CI
+name: CI
 
 on: [push, pull_request]
 
+# Nothing here needs a key. That is the property worth protecting: every
+# guarantee this project makes is checked by deterministic code, so the whole
+# suite — including the evals — runs on a fork's pull request with no secrets.
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Both, because a whole class of bug here is invisible on one of them.
+    # Found the hard way, in a single local run on Windows:
+    #   * a 10 MB parametrize value became a test id, and Windows refuses an
+    #     environment variable over 32767 characters (PYTEST_CURRENT_TEST);
+    #   * an undisposed engine kept a SQLite file open, and Windows cannot
+    #     delete an open file, so tmp_path cleanup failed;
+    #   * `read_text()` defaults to cp1252 there, so a source file containing
+    #     an em dash was undecodable;
+    #   * `time.monotonic()` advances in ~15.6 ms steps, so the run log's
+    #     ordering collapsed.
+    # Every one of them passed on Linux. CI was green while the only machine
+    # anyone works on was red.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -12,5 +31,44 @@ jobs:
           python-version: "3.11"
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pytest -q
-      - run: lint-imports
+
+      - name: Tests
+        run: pytest -q
+
+      - name: Layer rule
+        if: matrix.os == 'ubuntu-latest'
+        run: lint-imports
+
+      # Run separately as well as through pytest, so a failure reads as "the
+      # honesty guarantee regressed" rather than as one more red test.
+      - name: Evals
+        if: matrix.os == 'ubuntu-latest'
+        run: python -m scripts.eval
+
+      - name: Migrations match the models
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          python -m alembic upgrade head
+          python -m alembic check
+        env:
+          DATABASE_URL: sqlite+pysqlite:///./ci.db
+
+  web:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci
+      - name: Types
+        run: npm run typecheck
+      - name: Build
+        run: npm run build
+        env:
+          NEXT_PUBLIC_API_URL: http://localhost:8000

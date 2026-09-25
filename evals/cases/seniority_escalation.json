@@ -1,0 +1,185 @@
+{
+  "name": "seniority_escalation",
+  "why": "'Contributed to' becomes 'Led'. The work is real and the framing is a promotion the resume does not support - the subtlest of the three dishonesty modes, and the one a human reviewer is least likely to catch in their own resume.",
+  "resume": {
+    "contact": {
+      "full_name": "R. Khan",
+      "email": "r.khan@example.com",
+      "phone": "+1 555 0100",
+      "location": "Remote",
+      "linkedin": "",
+      "github": "",
+      "website": ""
+    },
+    "summary": "Data analyst working on reporting and internal tooling.",
+    "sections": [
+      {
+        "heading": "WORK EXPERIENCE",
+        "entries": [
+          {
+            "title": "Data Analyst",
+            "org": "Acme Corp",
+            "dates": "Jan 2022 - Present",
+            "bullets": [
+              "Built a dashboard that saved the team a day a week",
+              "Wrote Python scripts to load data into PostgreSQL"
+            ]
+          },
+          {
+            "title": "Intern",
+            "org": "Beta Labs",
+            "dates": "2021",
+            "bullets": [
+              "Contributed to a migration off a legacy reporting system"
+            ]
+          }
+        ]
+      },
+      {
+        "heading": "TECHNICAL SKILLS",
+        "entries": [
+          {
+            "title": "",
+            "org": "",
+            "dates": "",
+            "bullets": [
+              "Languages: Python, SQL",
+              "Tools: PostgreSQL, Docker"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "posting": "Backend Engineer - Annova\n\nWe are hiring a Backend Engineer to own our data platform. You will build and\nmaintain services in Python and FastAPI, and work with PostgreSQL at scale.\n\nRequirements\n- Strong proficiency in Python\n- Experience with FastAPI or a similar framework\n- Comfortable with PostgreSQL\n- Kubernetes experience is a plus\n\nSend your application to careers@annova.example.com.\n",
+  "model": {
+    "brief": {
+      "company": "Annova",
+      "role": "Backend Engineer",
+      "seniority": "mid",
+      "tone": "direct",
+      "role_narrative": "Own the data platform. Build and maintain Python services. Work with PostgreSQL at scale. Support the team's reporting needs.",
+      "problems_to_solve": [
+        {
+          "statement": "The data platform needs an owner.",
+          "start": 0,
+          "end": 60
+        }
+      ],
+      "success_signals": [
+        {
+          "statement": "Services in Python and FastAPI are maintained.",
+          "start": 0,
+          "end": 60
+        }
+      ],
+      "hard_requirements": [
+        {
+          "statement": "Strong proficiency in Python",
+          "start": 0,
+          "end": 30
+        },
+        {
+          "statement": "Experience with FastAPI",
+          "start": 0,
+          "end": 30
+        },
+        {
+          "statement": "Comfortable with PostgreSQL",
+          "start": 0,
+          "end": 30
+        }
+      ],
+      "terms": [
+        {
+          "term": "Python",
+          "kind": "skill",
+          "aliases": [],
+          "required": true,
+          "weight": 10
+        },
+        {
+          "term": "FastAPI",
+          "kind": "tool",
+          "aliases": [],
+          "required": true,
+          "weight": 8
+        },
+        {
+          "term": "PostgreSQL",
+          "kind": "tool",
+          "aliases": [
+            "postgres"
+          ],
+          "required": true,
+          "weight": 7
+        },
+        {
+          "term": "Kubernetes",
+          "kind": "tool",
+          "aliases": [
+            "k8s"
+          ],
+          "required": false,
+          "weight": 3
+        }
+      ]
+    },
+    "plan": {
+      "ops": [
+        {
+          "op": "set_summary",
+          "text": "Backend-leaning data analyst who builds Python services and works with PostgreSQL.",
+          "rationale": "The posting leads with Python and PostgreSQL.",
+          "cites": [
+            "exp.1.b.2"
+          ]
+        },
+        {
+          "op": "rewrite_bullet",
+          "bullet_id": "exp.2.b.1",
+          "text": "",
+          "target_terms": [
+            "Python",
+            "PostgreSQL"
+          ],
+          "rationale": "State the reporting work in the posting's language."
+        },
+        {
+          "op": "flag_gap",
+          "requirement": "Kubernetes",
+          "severity": "minor",
+          "closest_evidence": []
+        }
+      ]
+    },
+    "written": {
+      "bullets": [
+        {
+          "bullet_id": "exp.2.b.1",
+          "text": "Led the migration off a legacy reporting system"
+        }
+      ]
+    },
+    "outreach": {
+      "subject": "Backend Engineer - R. Khan",
+      "body": "Hello,\n\nI am applying for the Backend Engineer role. I write Python day to day and load data into PostgreSQL for the reporting tooling I maintain, which is the closest thing I have to the platform work this role describes. The attached resume lists the projects those came from.\n\nI have not worked with Kubernetes, so I have not claimed it. If that is a hard requirement rather than a preference, I would rather know now than waste your time.\n\nHappy to talk this week if it is useful.\n\nR. Khan",
+      "cites": [
+        "exp.1.b.2"
+      ]
+    }
+  },
+  "expect": {
+    "refusals": [
+      "seniority_escalation"
+    ],
+    "rejects_op": [
+      "rewrite_bullet"
+    ],
+    "present_in_resume": [
+      "Contributed to a migration"
+    ],
+    "render_clean": true,
+    "no_outreach_problems": true
+  }
+}

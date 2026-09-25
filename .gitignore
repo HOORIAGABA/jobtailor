@@ -6,14 +6,43 @@ __pycache__/
 venv/
 
 # Secrets
+#
+# The allow-list form on purpose: `.env.*` catches `.env.production`,
+# `.env.render`, `.env.backup` and every other variant someone invents at 2am,
+# and the two `!` lines put back the only files that are meant to be public.
+# Listing individual names would mean the next variant is the one that leaks.
 .env
-.env.local
+.env.*
+!.env.example
+!.env.local.example
 *.key
+*.pem
 
 # Data / artifacts
 data/
 outputs/
+out/
+
+# The sidecars matter as much as the database. `*.db` does NOT match
+# `jobtailor.db-wal`, and the write-ahead log holds recent transactions — which
+# here means the full text of whatever resume was last parsed. Both files sit
+# next to the database on any machine that has run the app.
 *.db
+*.db-wal
+*.db-shm
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Run artifacts. These hold the full text of whatever resume was parsed —
+# a name, an address, a phone number, an employment history. v1 kept exactly
+# this kind of folder at the repo root WITHOUT ignoring it, so real resume
+# PDFs were one `git add -A` from being public.
+runs/
+
+# Cached stage results. A cached parse is the full text of a resume, so this
+# is personal data for the same reason runs/ is.
+.cache/
 
 # Node
 node_modules/
@@ -21,6 +50,7 @@ node_modules/
 out/
 
 # Tooling
+.import_linter_cache/
 .pytest_cache/
 .ruff_cache/
 *.log

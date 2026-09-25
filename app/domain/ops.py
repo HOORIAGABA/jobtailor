@@ -20,9 +20,9 @@ Design notes that are easy to undo by accident:
 """
 from __future__ import annotations
 
-from typing import Annotated, Literal, Union
+from typing import Annotated, Any, Literal, Union, get_args
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class _Op(BaseModel):
@@ -128,9 +128,75 @@ Op = Annotated[
 ]
 
 
+def _op_names() -> frozenset[str]:
+    """Every operation name, read off the union itself.
+
+    Derived rather than listed, so adding a tenth operation cannot leave this
+    silently one short — the same reason `engine.apply` asserts at import time
+    that every mutating op has an applier.
+    """
+    names: set[str] = set()
+    for variant in get_args(get_args(Op)[0]):
+        field = variant.model_fields.get("op")
+        if field is not None:
+            names.update(get_args(field.annotation))
+    return frozenset(names)
+
+
+OP_NAMES: frozenset[str] = _op_names()
+
+
 class OpList(BaseModel):
-    """Wrapper so the whole union can be passed as one JSON schema to the model."""
+    """Wrapper so the whole union can be passed as one JSON schema to the model.
+
+    **Two alternative encodings are accepted**, because models produce them and
+    rejecting one costs a whole planner call to learn nothing.
+
+    Measured, on a real run: the planner returned a perfectly good plan —
+    a `promote_item` and an `ask_user` about a voice-agent pipeline — and this
+    class threw it away over punctuation. The retry then produced an empty
+    list, and the run reported "the model produced no operations". The planner
+    was working the entire time; the wrapper was not.
+
+    The two forms:
+
+        [ {...}, {...} ]              a bare list, no `ops` key
+        { "promote_item": {...} }     the variant tagged by key rather than
+                                      by an `op` field
+
+    Both are unambiguous — the second only when its single key is a known
+    operation name — so converting them is a *coercion*, not a repair. That
+    distinction matters: this accepts two well-defined spellings of the same
+    union, it does not go hunting for a plan inside arbitrary text. Anything
+    else still fails loudly.
+    """
     ops: list[Op] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def _accept_known_shapes(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            value = {"ops": value}
+        if not isinstance(value, dict):
+            return value
+
+        ops = value.get("ops")
+        if not isinstance(ops, list):
+            return value
+        return {**value, "ops": [_untag(op) for op in ops]}
+
+
+def _untag(op: Any) -> Any:
+    """`{"promote_item": {...}}` -> `{"op": "promote_item", ...}`.
+
+    Only when the single key names a real operation, so nothing else is
+    silently reshaped.
+    """
+    if (isinstance(op, dict) and len(op) == 1 and "op" not in op):
+        (name, body), = op.items()
+        if name in OP_NAMES and isinstance(body, dict):
+            return {"op": name, **body}
+    return op
 
 
 # ── Rejection ─────────────────────────────────────────────────────────
@@ -146,6 +212,11 @@ RejectCode = Literal[
     "missing_citation",
     "too_many_promotions",
     "would_empty_item",
+    # `set_skills` replaces the whole section, so it is the one op that can
+    # quietly shrink the document. See `validator._check_set_skills`.
+    "skills_dropped",
+    "unlabelled_group",
+    "duplicate_skill",
 ]
 
 

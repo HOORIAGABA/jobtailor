@@ -267,7 +267,10 @@ def test_a_bad_plan_is_caught_downstream_and_the_run_survives():
          "target_terms": [], "rationale": "quantify"},
         {"op": "rewrite_bullet", "bullet_id": "exp.2.b.1",
          "target_terms": [], "rationale": "strengthen"},
-        {"op": "set_skills", "groups": [{"label": "ML", "skills": ["PyTorch"]}]},
+        # Keeps every existing skill, so the only thing wrong with it is the
+        # one the corpus cannot support.
+        {"op": "set_skills", "groups": [
+            {"label": "ML", "skills": ["Python", "SQL", "Airflow", "PyTorch"]}]},
     ]}])
     ops = plan(brief, doc, _index(doc, brief), grounding_corpus(doc), planner)
 
@@ -320,3 +323,73 @@ def test_plan_surfaces_drops_to_the_caller():
 
     assert [o.op for o in ops] == ["flag_gap"]
     assert "totally.invented.b.1" in reasons[0]
+
+
+# ── the wrapper threw away a working plan ─────────────────────────────
+# Real run: the planner returned a promote_item and an ask_user about a
+# voice-agent pipeline, and OpList rejected the lot over punctuation. The
+# retry then produced an empty list, and the run reported "the model produced
+# no operations". The planner had been working the whole time.
+
+from app.domain.ops import OP_NAMES, OpList          # noqa: E402
+
+FLAG = {"op": "flag_gap", "requirement": "PyTorch", "severity": "major"}
+
+
+def test_the_documented_shape_still_works():
+    assert [o.op for o in OpList.model_validate({"ops": [FLAG]}).ops] == ["flag_gap"]
+
+
+def test_a_bare_list_is_accepted():
+    """No `ops` key — the exact shape that was rejected."""
+    assert [o.op for o in OpList.model_validate([FLAG]).ops] == ["flag_gap"]
+
+
+def test_the_tagged_encoding_is_accepted():
+    """`{"promote_item": {...}}` instead of `{"op": "promote_item", ...}`."""
+    parsed = OpList.model_validate([
+        {"promote_item": {"item_id": "exp.2", "rationale": "most relevant",
+                          "cites": []}},
+        {"ask_user": {"bullet_id": "exp.1.b.1",
+                      "question": "What did you use to build the pipeline?"}},
+    ])
+    assert [o.op for o in parsed.ops] == ["promote_item", "ask_user"]
+    assert parsed.ops[0].item_id == "exp.2"
+    assert "pipeline" in parsed.ops[1].question
+
+
+def test_both_forms_can_be_mixed():
+    parsed = OpList.model_validate([FLAG, {"promote_item": {
+        "item_id": "exp.1", "rationale": "r", "cites": []}}])
+    assert [o.op for o in parsed.ops] == ["flag_gap", "promote_item"]
+
+
+def test_an_unknown_tag_still_fails():
+    """A coercion, not a repair — it accepts two spellings of the union and
+    goes no further."""
+    with pytest.raises(Exception):
+        OpList.model_validate([{"not_an_operation": {"x": 1}}])
+
+
+def test_a_dict_that_merely_has_one_key_is_left_alone():
+    with pytest.raises(Exception):
+        OpList.model_validate([{"bullet_id": "exp.1.b.1"}])
+
+
+def test_an_op_carrying_its_own_op_field_is_untouched():
+    """Belt and braces: an object that already declares `op` is not reshaped
+    even if it happens to have one other key."""
+    assert OpList.model_validate([{"op": "flag_gap", "requirement": "X",
+                                   "severity": "minor"}]).ops[0].requirement == "X"
+
+
+def test_the_op_names_come_from_the_union():
+    """Derived, so a tenth operation cannot leave this one short."""
+    assert len(OP_NAMES) == 9
+    assert "rewrite_bullet" in OP_NAMES
+    assert "flag_gap" in OP_NAMES
+
+
+def test_an_empty_plan_is_still_an_empty_plan():
+    assert OpList.model_validate([]).ops == []
+    assert OpList.model_validate({"ops": []}).ops == []

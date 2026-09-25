@@ -38,14 +38,31 @@ python-docx==1.1.2
 fpdf2==2.8.8
 
 # --- Auth & mail --------------------------------------------------------
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
-bcrypt==4.0.1
+# Fernet, for encrypting Google refresh tokens at rest (app/engine/secrets.py).
+# A refresh token does not expire on its own, so a leaked row is the ability to
+# send mail as the candidate indefinitely — a materially worse breach than a
+# leaked resume, and the reason this is a direct dependency rather than a
+# transitive one.
 cryptography==43.0.1
-google-api-python-client==2.199.0
-google-auth-oauthlib==1.4.1
-requests==2.32.3
-email-validator==2.2.0
+#
+# Removed, each for a reason worth keeping written down:
+#
+#   python-jose      no JWT is parsed anywhere. The session cookie is an HMAC
+#                    over a length-prefixed payload (app/engine/authsession.py),
+#                    so no library reads an `alg` field out of attacker-supplied
+#                    input — `alg: none` and RS256-to-HS256 confusion are both
+#                    attacks on exactly that. Google's ID token arrives in the
+#                    body of a direct TLS response from the token endpoint and
+#                    is decoded, not verified; see app/io/google.py.
+#   passlib, bcrypt  there are no passwords. Sign-in is Google only.
+#   google-api-*     the OAuth and Gmail endpoints are four HTTPS POSTs; httpx
+#                    is already here, and the client libraries pull in their own
+#                    auth stack, protobuf and a discovery cache for it.
+#   requests         nothing imports it, and `app.engine` is forbidden from
+#                    doing so by .importlinter. httpx is the one HTTP client.
+#   email-validator  no EmailStr field exists. An address either came from
+#                    Google or was typed by the user at the gate, where the
+#                    check that matters is a human reading it.
 
 # --- Observability ------------------------------------------------------
 langfuse==2.53.1

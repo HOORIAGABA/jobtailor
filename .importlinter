@@ -4,11 +4,19 @@
 #   I3  one producer per fact class
 #   I5  deterministic work is never done by an LLM
 #
-# `engine` and `domain` cannot import `agents` or `io`, so no matching,
-# scoring, validation or application can quietly acquire a model call.
+# `engine` and `domain` cannot import `agents`, `io` or `db`, so no matching,
+# scoring, validation or application can quietly acquire a model call or a
+# database read.
 #
 # Order matters and is easy to get wrong: `agents` sits ABOVE `io` because an
 # agent uses the LLM client, not the other way round.
+#
+# `db` sits between `io` and `engine`. It is I/O, so it is below the stages that
+# use it; it is above `engine` because nothing deterministic may read a row. The
+# two are siblings in practice — `io` does not import `db` and never should —
+# but expressing that as an ordering rather than as independence keeps this file
+# a single readable stack, and the forbidden contract below is what actually
+# stops the direction that matters.
 
 [importlinter]
 root_packages =
@@ -23,17 +31,19 @@ layers =
     app.pipeline
     app.agents
     app.io
+    app.db
     app.engine
     app.domain
 
 [importlinter:contract:engine-is-deterministic]
-name = engine and domain must never reach a model or the network
+name = engine and domain must never reach a model, the network or a database
 type = forbidden
 source_modules =
     app.engine
     app.domain
 forbidden_modules =
     app.io
+    app.db
     app.agents
     app.pipeline
     httpx
@@ -41,3 +51,15 @@ forbidden_modules =
     google
     langchain_core
     langgraph
+    sqlalchemy
+
+[importlinter:contract:db-holds-no-business-rules]
+name = db may not import the stages it stores the output of
+type = forbidden
+source_modules =
+    app.db
+forbidden_modules =
+    app.io
+    app.agents
+    app.pipeline
+    app.engine

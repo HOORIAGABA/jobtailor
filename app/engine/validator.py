@@ -28,6 +28,7 @@ from dataclasses import dataclass
 from typing import Iterable, Sequence
 
 from app.domain.models import ResumeDoc
+from app.engine.normalize import existing_skills, skill_key
 from app.engine.text import tokens as text_tokens
 from app.domain.ops import (
     ADVISORY_OPS, DropBullet, Op, PromoteItem, Reject, ReorderBullets,
@@ -60,6 +61,10 @@ _NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
 # version had.
 _tokens = text_tokens
 
+# The same word shape as `engine.text`, kept as a span-yielding pattern because
+# `entities` needs to know WHERE a token sits, not only what it is.
+_WORD_SPAN = re.compile(r"(?:\.[A-Za-z]|[A-Za-z0-9])[A-Za-z0-9+#.\-]*")
+
 # Words that are capitalized for grammatical reasons, not because they name
 # something. Without this every sentence-initial word looks like an entity.
 _NOT_ENTITIES = frozenset({
@@ -78,24 +83,93 @@ def numbers(text: str) -> set[str]:
     return {m.group().replace(",", "") for m in _NUMBER.finditer(text or "")}
 
 
+# Words that open a sentence and name nothing. Only consulted for a token that
+# is sentence-initial, where the capital is grammar rather than evidence.
+#
+# This list exists because of a measured false positive, and the measurement is
+# worth keeping: a perfectly ordinary covering letter —
+#
+#     "… Happy to talk this week if it is useful."
+#     "… If that is a hard requirement rather than a preference …"
+#
+# had `Happy` and `If` reported as "named thing(s) the resume does not support".
+# The old rule skipped only the FIRST word of the whole text, so in anything
+# longer than one sentence every sentence opener was read as a capability
+# claim. On a real draft that is a warning on every letter, which is how a
+# person learns to ignore the warnings — and the warnings are the product.
+_SENTENCE_OPENERS = frozenset({
+    "happy", "glad", "pleased", "thanks", "thank", "please", "best", "regards",
+    "hello", "hi", "dear", "if", "while", "although", "though", "since",
+    "given", "having", "would", "could", "should", "may", "might", "must",
+    "here", "there", "they", "you", "your", "when", "where", "what", "why",
+    "how", "so", "then", "also", "however", "unfortunately", "additionally",
+    "finally", "first", "second", "next", "after", "before", "during", "both",
+    "either", "neither", "not", "no", "yes", "one", "two", "more", "most",
+    "many", "some", "any", "all", "each", "every", "such", "very", "just",
+    "only", "even", "still", "again", "about", "over", "under", "between",
+    "without", "within", "into", "out", "per", "via", "than", "because",
+    "therefore", "thus", "hence", "meanwhile", "moreover", "furthermore",
+    "overall", "currently", "recently", "previously", "today", "now", "as",
+    "at", "for", "from", "with", "by",
+})
+
+# What ends a sentence, for the purpose of "is the next capital grammatical".
+# A newline counts: a bullet list has no full stops and every line starts with
+# a capital.
+_SENTENCE_END = re.compile(r"[.!?:;\n\r•\-–—]\s*$")
+
+
+def _sentence_starts(text: str) -> set[int]:
+    """Character offsets where a new sentence begins."""
+    starts = {0}
+    for match in re.finditer(r"[.!?:;\n\r•]|(?<=\s)[-–—](?=\s)", text or ""):
+        after = match.end()
+        while after < len(text) and text[after].isspace():
+            after += 1
+        starts.add(after)
+    return starts
+
+
 def entities(text: str) -> set[str]:
     """Candidate named things: proper nouns, acronyms, tool-shaped tokens.
 
-    Deliberately over-inclusive on tokens that *look* like names and
-    conservative about position: the first word of the text is skipped, since
-    it is capitalized by convention.
+    Deliberately over-inclusive on tokens that *look* like names, and
+    position-aware about capitals: a capital at the start of a sentence is
+    grammar, so it only counts as a name when the word is not one of the
+    ordinary openers above.
+
+    **The residual false negative is accepted deliberately.** A capability named
+    only at the very start of a sentence — "Kubernetes is required here." — and
+    nowhere else is missed. That is the right way round: this set is used to
+    REFUSE claims, so a false positive blocks an honest sentence while a false
+    negative lets one through to the other checks and to the human at the gate.
+    A capability that appears anywhere else in the text is still caught, and in
+    practice a letter that mentions a tool mentions it mid-sentence too.
     """
-    tokens = _tokens(text)
+    body = text or ""
+    starts = _sentence_starts(body)
     found: set[str] = set()
-    for i, tok in enumerate(tokens):
+
+    for match in _WORD_SPAN.finditer(body):
+        tok = match.group().rstrip(".-") or match.group()
         low = tok.lower()
         if low in _NOT_ENTITIES or len(tok) < 2:
             continue
+
         is_acronym = tok.isupper() and len(tok) >= 2
-        is_titlecase = tok[0].isupper() and i > 0
         is_toolish = any(c in tok for c in "+#.") and any(c.isalpha() for c in tok)
-        if is_acronym or is_titlecase or is_toolish:
+        # An acronym or a tool-shaped token is a strong signal wherever it sits.
+        if is_acronym or is_toolish:
             found.add(low)
+            continue
+
+        if not tok[0].isupper():
+            continue
+        if match.start() in starts and low in _SENTENCE_OPENERS:
+            continue                      # grammar, not a name
+        if match.start() == 0:
+            continue                      # the very first word, as before
+        found.add(low)
     return found
 
 
@@ -167,18 +241,64 @@ def _jaccard(a: Sequence[str], b: Sequence[str]) -> float:
     return len(sa & sb) / len(sa | sb)
 
 
+# The words that join a list of keywords to a sentence. They are the entire
+# grammatical cost of appending "using X, Y and Z" to a bullet, so a rewrite
+# whose only new words are these has added no meaning.
+_LIST_GLUE = frozenset({
+    "using", "with", "including", "and", "or", "plus", "via", "through",
+    "leveraging", "utilizing", "utilising", "across", "in", "on", "for",
+    "such", "as", "well", "alongside", "featuring", "powered", "by", "built",
+})
+
+
 def is_keyword_stuffing(origin: str, rewritten: str, terms: Sequence[str]) -> bool:
     """True when the rewrite added keywords and changed nothing else.
 
-    Strip the job terms from both sides. If what remains is essentially the same
-    sentence, the rewrite did not change what the bullet *says* — it decorated
-    it. That is the failure mode a coverage metric would have rewarded.
+    Two shapes, because stuffing has two shapes and only one of them is a
+    similarity problem.
+
+    **Substitution** — the sentence is reworded around inserted terms. Strip the
+    terms from both sides; if what remains is essentially the same sentence, the
+    rewrite decorated rather than changed it. That is the Jaccard check.
+
+    **Appending** — `"…a day a week"` becomes `"…a day a week using Python, SQL,
+    PostgreSQL and Docker"`. Jaccard *misses this*, and the reason is worth
+    stating: appending anything lowers set similarity, so the longer the list of
+    keywords, the more "changed" the sentence scores. The check rewarded exactly
+    what it existed to catch.
+
+    Found by an eval case. A bullet stuffed with four grounded capability names
+    scored 0.69 — under the 0.85 threshold — and was accepted. It survived the
+    entity rule too, because every name really was in the resume: this is the
+    version of stuffing that nothing else in the validator can see.
+
+    So appending is checked structurally instead: if every new word is either a
+    capability name or the grammar needed to bolt a list onto a sentence, no
+    meaning was added, however long the addition is.
+
+    `terms` is the job's vocabulary. Capability-shaped words the *resume* owns
+    count too — `entities()` finds them — because stuffing with your own real
+    skills is still stuffing, and it is the only kind that gets this far.
     """
-    present_before = {t.lower() for t in terms if t.lower() in (origin or "").lower()}
-    present_after = {t.lower() for t in terms if t.lower() in (rewritten or "").lower()}
+    origin, rewritten = origin or "", rewritten or ""
+    vocabulary = list(terms) + list(entities(rewritten))
+
+    present_before = {t.lower() for t in vocabulary if t.lower() in origin.lower()}
+    present_after = {t.lower() for t in vocabulary if t.lower() in rewritten.lower()}
     if not (present_after - present_before):
-        return False
-    return _jaccard(_strip_terms(origin, terms), _strip_terms(rewritten, terms)) > _STUFF_SIMILARITY
+        return False                      # no keywords were added at all
+
+    kept_origin = _strip_terms(origin, vocabulary)
+    kept_rewritten = _strip_terms(rewritten, vocabulary)
+
+    # Appending: nothing was removed, and everything new is glue.
+    added = [w for w in kept_rewritten if w not in set(kept_origin)]
+    removed = [w for w in kept_origin if w not in set(kept_rewritten)]
+    if not removed and all(word in _LIST_GLUE for word in added):
+        return True
+
+    # Substitution: the sentence around the terms did not really move.
+    return _jaccard(kept_origin, kept_rewritten) > _STUFF_SIMILARITY
 
 
 def term_density_violation(text: str, terms: Sequence[str]) -> str | None:
@@ -251,6 +371,78 @@ def _check_rewrite(op: RewriteBullet, doc: ResumeDoc, corpus: set[str]) -> Rejec
     return None
 
 
+def _check_set_skills(op: SetSkills, doc: ResumeDoc, corpus: set[str]) -> Reject | None:
+    """Reorder and regroup freely. Do not lose anything.
+
+    **This rule exists because of a specific accepted edit.** On
+    `runs/2026-09-25T07-51-32`, `set_skills` took a skills section of 8 grouped
+    lines down to 3 unlabelled ones and deleted the candidate's entire computer
+    vision group — YOLO, VGG16, VGG19, MobileNet V3, ResNet50, object detection
+    — which is what most of their project work is about.
+
+    The validator accepted it, correctly by its own rules: nothing was
+    invented, so `fabrication_count` was 0. **Deleting true content was simply
+    not a thing this stage checked.** The run's `no_content_silently_lost`
+    proof check did catch it (48 bullets in, 43 out, no `drop_bullet` op) — but
+    a proof check is a report printed after the edit has been applied, and by
+    then the op is already in the list the candidate is asked to approve. A
+    guard that reports is not a guard that refuses.
+
+    `set_skills` is a whole-section replacement, so it is the one op that can
+    quietly shrink the document. The rules below make the replacement
+    non-destructive while leaving the model complete freedom over arrangement:
+
+    1. **Nothing is lost.** Every skill on the page must still be on the page.
+    2. **Every group is labelled.** The failing op emitted three groups with
+       `label: ""`, which renders as three anonymous rows.
+    3. **No skill appears twice.** A term in two groups is a contradiction
+       about where it belongs.
+    4. **Nothing is invented** — the pre-existing corpus check, unchanged.
+
+    Regrouping, renaming a group, merging two groups and reordering are all
+    still allowed, which is the point: the planner needs a way to put the
+    job's skills first, and taking that away would only push the damage into
+    some other op.
+    """
+    proposed: dict[str, str] = {}
+    duplicates: list[str] = []
+    for group in op.groups:
+        for skill in group.skills:
+            key = skill_key(skill)
+            if not key:
+                continue
+            if key in proposed:
+                duplicates.append(skill)
+            proposed[key] = skill
+
+    existing = existing_skills(doc)
+    if (lost := sorted(existing[k] for k in existing if k not in proposed)):
+        return _reject(
+            op, "skills_dropped",
+            f"would remove {len(lost)} skill(s) already on the resume: "
+            f"{lost}. Regroup and reorder freely, but keep every one.",
+        )
+
+    if (unlabelled := sum(1 for g in op.groups if g.skills and not g.label.strip())):
+        return _reject(op, "unlabelled_group",
+                       f"{unlabelled} group(s) have no heading")
+
+    if duplicates:
+        return _reject(op, "duplicate_skill",
+                       f"listed in more than one group: {sorted(set(duplicates))}")
+
+    # An empty corpus means we cannot ground anything, so we do not filter —
+    # rejecting every skill would be worse than allowing them. This is also the
+    # "resume had no skills section" case, where the model composes one from
+    # scratch and there is nothing to compare it against.
+    unsupported = {s for k, s in proposed.items() if k not in corpus}
+    if corpus and unsupported:
+        return _reject(op, "unsupported_entity",
+                       f"skills not evidenced by the resume: {sorted(unsupported)}",
+                       ask=True)
+    return None
+
+
 def _check_reorder(op, doc: ResumeDoc) -> Reject | None:
     if isinstance(op, ReorderItems):
         section = doc.section(op.section_id)
@@ -308,13 +500,7 @@ def validate(
                                       f"more than one promotion in {key}")
 
         elif isinstance(op, SetSkills):
-            unsupported = {s for s in op.all_skills() if s.lower().strip() not in corpus}
-            # An empty corpus means we cannot ground anything, so we do not
-            # filter — rejecting every skill would be worse than allowing them.
-            if corpus and unsupported:
-                problem = _reject(op, "unsupported_entity",
-                                  f"skills not evidenced by the resume: {sorted(unsupported)}",
-                                  ask=True)
+            problem = _check_set_skills(op, doc, corpus)
 
         elif isinstance(op, SetSummary):
             if not op.cites:

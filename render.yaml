@@ -1,0 +1,90 @@
+# Render blueprint for the API. `render.yaml` in the repo root; Render reads it
+# on connect and again on every push.
+#
+# ── What this deployment is, and is not ──────────────────────────────────────
+#
+# **It serves stored runs and cannot start new ones.** That is the honest shape
+# of a free-tier deployment of this product, not a limitation dressed up:
+#
+#   * a run takes minutes, and no HTTP request survives that;
+#   * the model that makes it cheap is Ollama on a laptop, which the internet
+#     cannot reach;
+#   * a hosted key would spend one free-tier quota per visitor.
+#
+# So `JOBTAILOR_READ_ONLY` is on. What a public URL can honestly offer is the
+# product with the waiting removed: the diff, the gaps, the draft, the rendered
+# files, and the gate — all of it real, none of it costing a model call. The
+# full app runs on the machine that has the model.
+#
+# ── The free tier, as it actually behaves ────────────────────────────────────
+#
+#   750 instance-hours a month, which is one service running continuously.
+#   Spins down after 15 minutes idle; the next request waits 30-50 seconds for
+#   a cold start. That is survivable for a portfolio link and is the reason the
+#   UI shows what it is waiting for rather than a spinner.
+#   The filesystem is ephemeral — every restart is a clean disk. Nothing here
+#   writes files it expects to find later: artifacts are bytes in Postgres,
+#   which is exactly why `io/render` returns bytes and not paths.
+#
+# ── Secrets ──────────────────────────────────────────────────────────────────
+#
+# `sync: false` means Render asks for the value once and never puts it in the
+# repo. Generate the three signing keys with `python -m scripts.keys`.
+#
+# DEV_USER_EMAIL is deliberately absent. It is an authentication bypass, it is
+# ignored when ENVIRONMENT=production, and `config.check` complains if it is
+# set — but the surest place to not have it is here.
+
+services:
+  - type: web
+    name: jobtailor-api
+    runtime: python
+    plan: free
+    region: oregon
+    buildCommand: pip install -r requirements.txt
+    # One worker on purpose. The rate limiter counts in-process, so two workers
+    # would mean two counters and an effective limit of double what is written
+    # down. On a free instance one worker is also all the memory allows.
+    startCommand: >
+      python -m alembic upgrade head &&
+      python -m uvicorn app.api.main:app --host 0.0.0.0 --port $PORT --workers 1
+    healthCheckPath: /api/capabilities
+    envVars:
+      - key: ENVIRONMENT
+        value: production
+      - key: JOBTAILOR_READ_ONLY
+        value: "true"
+
+      # The UI's origin. A wildcard cannot work here: browsers reject a
+      # credentialed response whose Access-Control-Allow-Origin is `*`, and
+      # `config.check` refuses it rather than letting sign-in break silently.
+      - key: CORS_ORIGINS
+        value: https://jobtailor.vercel.app
+      - key: FRONTEND_URL
+        value: https://jobtailor.vercel.app
+
+      - key: DATABASE_URL
+        sync: false          # Neon, Supabase, or a Render Postgres instance
+      - key: JWT_SECRET
+        sync: false
+      - key: FERNET_KEY
+        sync: false
+      - key: CONFIRM_TOKEN_SECRET
+        sync: false
+
+      # Google sign-in. The redirect URI must match the OAuth client character
+      # for character — a trailing slash is a redirect_uri_mismatch.
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GOOGLE_REDIRECT_URI
+        value: https://jobtailor-api.onrender.com/api/auth/google/callback
+
+      # The default, and the one that cannot send. Set to gmail_api only when
+      # the OAuth client is verified and you mean it.
+      - key: MAIL_PROVIDER
+        value: console
+
+      # A model is not configured. A read-only instance never calls one, and
+      # `GET /` reports it as missing rather than pretending otherwise.

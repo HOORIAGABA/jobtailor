@@ -194,6 +194,72 @@ def undemonstrated_terms(brief: JobBrief, index: EvidenceIndex) -> list[str]:
     return [t.term for t in brief.terms if f"term.{t.term.lower()}" in unmatched]
 
 
+# ── how confident the gap list is allowed to sound ────────────────────
+
+TermStanding = Literal["demonstrated", "declared_only", "not_found"]
+
+
+def term_standing(
+    brief: JobBrief, doc: ResumeDoc, index: EvidenceIndex,
+) -> dict[str, TermStanding]:
+    """Where each job term stands in this resume, in three honest grades.
+
+    Matching here is lexical: a term is found when a bullet *names* it. So a
+    line that demonstrates a capability without naming it —
+
+        "Built nightly jobs with dependency handling and automatic retries"
+
+    — produces nothing for `Airflow`, and the old two-way split then reported
+    that as a flat gap. The candidate is told to go add something they already
+    have, and the planner is handed the same false claim as context.
+
+    Three grades instead of two, because the system's confidence genuinely
+    differs between them:
+
+    * `demonstrated`  — a bullet names it and shows the work. Certain.
+    * `declared_only` — it is in the skills section, nothing demonstrates it.
+      Also certain, and a different problem: a declaration is not evidence.
+    * `not_found`     — this matcher did not find it. **Not the same as
+      absent.** Until retrieval can recognise an unnamed capability, this
+      grade is a prompt to look, not a verdict.
+
+    The wording matters as much as the grouping. `not_found` is the only
+    honest name for what lexical matching can conclude.
+    """
+    aliases = AliasIndex.build(brief.terms)
+    declared = aliases.find(" , ".join(doc.skill_inventory))
+
+    # Demonstrated means a BULLET LINKS to it — not merely "absent from the
+    # unmatched list". Those differ precisely where it matters: a declared
+    # skill is deliberately kept out of `unmatched_elements` so it is not
+    # reported as a gap, and reading absence-from-unmatched as evidence would
+    # grade every declared skill as demonstrated. Which is the exact claim
+    # this module exists to refuse.
+    linked = {link.job_element_id for link in index.links}
+
+    standing: dict[str, TermStanding] = {}
+    for term in brief.terms:
+        if f"term.{term.term.lower()}" in linked:
+            standing[term.term] = "demonstrated"
+        elif term.term in declared:
+            standing[term.term] = "declared_only"
+        else:
+            standing[term.term] = "not_found"
+    return standing
+
+
+def terms_by_standing(
+    brief: JobBrief, doc: ResumeDoc, index: EvidenceIndex,
+) -> dict[TermStanding, list[str]]:
+    """The same answer grouped, for a UI that shows three lists."""
+    out: dict[TermStanding, list[str]] = {
+        "demonstrated": [], "declared_only": [], "not_found": [],
+    }
+    for term, grade in term_standing(brief, doc, index).items():
+        out[grade].append(term)
+    return out
+
+
 def elements_by_bullet(index: EvidenceIndex) -> dict[str, list[str]]:
     """bullet id -> the job elements it evidences. The planner's view."""
     out: dict[str, list[str]] = {}

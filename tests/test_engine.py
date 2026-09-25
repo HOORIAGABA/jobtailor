@@ -342,9 +342,11 @@ def test_summary_must_cite_and_cites_must_resolve():
 
 
 def test_skills_must_be_evidenced():
-    bad = _accept(SetSkills(op_id="1", groups=[SkillGroup(skills=["Python", "Kubernetes"])]))
+    bad = _accept(SetSkills(op_id="1", groups=[
+        SkillGroup(label="Core", skills=["Python", "Kubernetes"])]))
     assert bad.rejected[0].code == "unsupported_entity"
-    ok = _accept(SetSkills(op_id="1", groups=[SkillGroup(skills=["Python", "SQL"])]))
+    ok = _accept(SetSkills(op_id="1", groups=[
+        SkillGroup(label="Core", skills=["Python", "SQL"])]))
     assert ok.rejected == []
 
 
@@ -352,7 +354,8 @@ def test_empty_corpus_disables_skill_filtering():
     """Cannot ground ⇒ do not filter. Rejecting everything would be worse."""
     doc = _doc()
     doc.skill_inventory = []
-    r = validate([SetSkills(op_id="1", groups=[SkillGroup(skills=["Python"])])], doc)
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="Core", skills=["Python"])])], doc)
     assert r.rejected == []
 
 
@@ -411,3 +414,312 @@ def test_dotted_tool_names_match_the_corpus():
     r = validate([RewriteBullet(op_id="1", bullet_id="exp.1.b.1",
                                 text="Built reporting services in .NET and C++")], doc)
     assert r.rejected == []
+
+
+# ── numeric dates (Europass and every dd/mm/yyyy resume) ──────────────
+
+def test_a_europass_date_range_keeps_its_months():
+    """`01/03/2026 - 13/08/2026` read as ("2026", "2026") loses the ordering.
+
+    Two roles at the same company in one year then cannot be told apart.
+    """
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("[ 01/03/2026 - 13/08/2026 ]") == ("2026-03", "2026-08")
+    assert parse_date_range("24/06/2024 - 24/09/2024") == ("2024-06", "2024-09")
+    assert parse_date_range("01/10/2021 - 17/07/2025") == ("2021-10", "2025-07")
+
+
+def test_a_day_first_date_is_disambiguated_by_the_impossible_month():
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("13/08/2026") == ("2026-08", "")     # 13 is not a month
+
+
+def test_a_month_first_date_is_disambiguated_too():
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("06/24/2024") == ("2024-06", "")     # 24 is not a month
+
+
+def test_an_ambiguous_numeric_date_is_read_day_first():
+    """01/03 could be either. Day-first is the convention of formats that
+    write dates numerically at all, so that is the documented choice."""
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("01/03/2026") == ("2026-03", "")
+
+
+def test_a_month_year_date_works():
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("03/2026 - 08/2026") == ("2026-03", "2026-08")
+    assert parse_date_range("2024-06 - 2024-09") == ("2024-06", "2024-09")
+
+
+def test_numeric_dates_still_honour_present():
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("01/2020 - Present") == ("2020-01", "")
+
+
+def test_month_names_are_unaffected():
+    from app.engine.normalize import parse_date_range
+    assert parse_date_range("Jan 2022 - Present") == ("2022-01", "")
+    assert parse_date_range("2021") == ("2021", "")
+
+
+# ── headings from real resumes ────────────────────────────────────────
+
+def test_about_me_is_a_summary_not_a_custom_section():
+    """Europass's default heading. It fell to `custom`, so the document-level
+    summary was never derived from it."""
+    from app.engine.normalize import classify_heading
+    assert classify_heading("ABOUT ME") == "summary"
+    assert classify_heading("Personal Statement") == "summary"
+    assert classify_heading("Profile Summary") == "summary"
+
+
+def test_a_specific_probe_still_wins_over_about():
+    """First hit wins, so "About my projects" must not become a summary."""
+    from app.engine.normalize import classify_heading
+    assert classify_heading("About my projects") == "projects"
+
+
+def test_europass_headings_classify():
+    from app.engine.normalize import classify_heading
+    assert classify_heading("EDUCATION AND TRAINING") == "education"
+    assert classify_heading("DIGITAL SKILLS") == "skills"
+    assert classify_heading("LANGUAGE SKILLS") == "skills"
+
+
+def test_an_unknown_heading_still_survives_as_custom():
+    """`custom` is the honest answer, not a failure — the content is kept."""
+    from app.engine.normalize import classify_heading
+    assert classify_heading("HONOURS AND AWARDS") == "custom"
+
+
+# ══ set_skills may rearrange, never shrink ═══════════════════════════
+# From runs/2026-09-25T07-51-32: `set_skills` took a real skills section of 8
+# grouped lines down to 3 unlabelled ones and deleted the candidate's entire
+# computer-vision group. The validator accepted it — correctly by its own
+# rules, since nothing was invented. Deleting true content was not a thing
+# this stage checked.
+
+def _skilled_doc() -> ResumeDoc:
+    """A resume whose skills section is grouped, the way real ones are."""
+    from app.domain.models import Bullet, Item, Section
+    doc = _doc()
+    section = Section(id="sec.skills", kind="skills", heading="SKILLS", items=[
+        Item(id="skl.1", title="Computer Vision", bullets=[
+            Bullet(id="skl.1.b.1", text="YOLO, VGG16, ResNet50, object detection")]),
+        Item(id="skl.2", title="Backend", bullets=[
+            Bullet(id="skl.2.b.1", text="Python FastAPI, Flask, n8n")]),
+    ])
+    doc.sections.append(section)
+    doc.skill_inventory = [
+        "YOLO", "VGG16", "ResNet50", "object detection",
+        "Python FastAPI", "Flask", "n8n",
+    ]
+    return doc
+
+
+def test_set_skills_may_not_drop_a_skill_already_on_the_resume():
+    """The exact op that shipped a resume without its own specialisation."""
+    doc = _skilled_doc()
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="Automation", skills=["n8n", "Python FastAPI", "Flask"]),
+    ])], doc)
+
+    assert len(r.rejected) == 1
+    reject = r.rejected[0]
+    assert reject.code == "skills_dropped"
+    # The message names what would have gone, so the failure is readable.
+    for gone in ("YOLO", "VGG16", "ResNet50", "object detection"):
+        assert gone in reject.detail
+
+
+def test_set_skills_may_regroup_rename_and_reorder_freely():
+    """Rearranging is the whole point of the op — only loss is refused.
+
+    The job's skills lead, the candidate's own specialism follows under a
+    heading the model invented. Nothing is lost, so nothing is rejected.
+    """
+    doc = _skilled_doc()
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="Automation & Backend",
+                   skills=["n8n", "Python FastAPI", "Flask"]),
+        SkillGroup(label="Machine Learning & Vision",
+                   skills=["YOLO", "VGG16", "ResNet50", "object detection"]),
+    ])], doc)
+    assert r.rejected == []
+    assert len(r.accepted) == 1
+
+
+def test_set_skills_rejects_an_unlabelled_group():
+    """The failing op emitted three groups with `label: ""`."""
+    doc = _skilled_doc()
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="", skills=["n8n", "Python FastAPI", "Flask"]),
+        SkillGroup(label="Vision",
+                   skills=["YOLO", "VGG16", "ResNet50", "object detection"]),
+    ])], doc)
+    assert r.rejected[0].code == "unlabelled_group"
+
+
+def test_set_skills_rejects_the_same_skill_in_two_groups():
+    doc = _skilled_doc()
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="Automation", skills=["n8n", "Python FastAPI", "Flask"]),
+        SkillGroup(label="Vision", skills=["YOLO", "VGG16", "ResNet50",
+                                           "object detection", "n8n"]),
+    ])], doc)
+    assert r.rejected[0].code == "duplicate_skill"
+    assert "n8n" in r.rejected[0].detail
+
+
+def test_a_resume_with_no_skills_section_can_have_one_composed():
+    """Nothing on the page means nothing to lose — the model proposes freely.
+
+    This is a deliberate choice, not an oversight: a resume without a skills
+    section still deserves one, and there is no prior list to preserve. The
+    corpus is empty in this case too, so the ungrounded-skill check also stands
+    down rather than rejecting every entry.
+    """
+    doc = _doc()
+    doc.skill_inventory = []
+    assert doc.section_of_kind("skills") is None
+
+    r = validate([SetSkills(op_id="1", groups=[
+        SkillGroup(label="Core", skills=["Python", "FastAPI"])])], doc)
+    assert r.rejected == []
+
+
+def test_a_nested_label_does_not_become_a_skill():
+    """`"API Python frameworks: Flask"` reached a proposed resume edit.
+
+    Only the first colon was stripped, so a line like
+
+        "Backend & Production Pipelines: Python FastAPI,
+         API Python frameworks: Flask, FastAPI - Uvicorn"
+
+    left the second label glued to its value. That string entered the
+    grounding corpus and the planner later echoed it back as a skill.
+    """
+    from app.engine.normalize import split_skill_line
+
+    terms = split_skill_line(
+        "Backend & Production Pipelines: Python FastAPI, "
+        "API Python frameworks: Flask, Github actions")
+    assert "Flask" in terms
+    assert not [t for t in terms if ":" in t]
+
+
+def test_skill_group_headings_are_recovered_from_bullets():
+    """A real parse put the group headings in with the skills.
+
+    The page printed four labelled groups; the parse produced one entry whose
+    bullets interleaved headings and contents. Left alone, the grounding
+    corpus gained `Backend & Production Pipelines` as a claimable skill, and
+    the no-loss rule would have demanded a planner keep it — something no
+    correct plan can do.
+    """
+    from app.domain.models import RawEntry, RawResume, RawSection
+    from app.engine.normalize import existing_skills, normalize
+
+    doc = normalize(RawResume(sections=[RawSection(
+        heading="SKILLS", entries=[RawEntry(
+            title="Computer Vision & Image Processing",
+            bullets=[
+                "YOLO | computer vision | Object detection",
+                "AI/ML Frameworks & Techniques",
+                "Python & libraries (Numpy, Pytorch) | Ensemble Methods",
+                "Backend & Production Pipelines",
+                "Python FastAPI | API Python frameworks: Flask | Github actions",
+            ])])]))
+
+    section = doc.section_of_kind("skills")
+    assert [i.title for i in section.items] == [
+        "Computer Vision & Image Processing",
+        "AI/ML Frameworks & Techniques",
+        "Backend & Production Pipelines",
+    ]
+    skills = existing_skills(doc)
+    assert "backend & production pipelines" not in skills
+    assert "ai/ml frameworks & techniques" not in skills
+    assert {"yolo", "flask", "pytorch", "n8n"} & set(skills) == {"yolo", "flask", "pytorch"}
+
+
+def test_a_lone_skill_is_not_promoted_into_an_empty_group():
+    """`Python` on its own last line is a skill, not a heading."""
+    from app.domain.models import RawEntry, RawResume, RawSection
+    from app.engine.normalize import existing_skills, normalize
+
+    doc = normalize(RawResume(sections=[RawSection(
+        heading="SKILLS", entries=[RawEntry(
+            title="Tools", bullets=["Docker | Git", "Python"])])]))
+    assert "python" in existing_skills(doc)
+
+
+def test_a_slash_inside_a_word_is_not_a_list_separator():
+    from app.engine.normalize import _looks_like_a_group_heading
+
+    assert _looks_like_a_group_heading("AI/ML Frameworks & Techniques")
+    assert _looks_like_a_group_heading("CI/CD Tooling")
+    assert not _looks_like_a_group_heading("Python / Java / Go")
+    assert not _looks_like_a_group_heading("Docker, Git, Make")
+
+
+def test_skill_key_ignores_case_and_edge_punctuation_only():
+    """Shallow on purpose — a clever key would hide a real deletion."""
+    from app.engine.normalize import skill_key
+
+    assert skill_key("PyTorch") == skill_key("pytorch") == "pytorch"
+    assert skill_key("  Object detection.  ") == "object detection"
+    assert skill_key("FastAPI") != skill_key("Flask")
+    # No stemming, no synonyms: these stay distinct.
+    assert skill_key("API integrations") != skill_key("API integration")
+
+
+# ══ entity extraction is position-aware ═══════════════════════════════
+
+def test_a_sentence_opener_is_grammar_not_a_named_capability():
+    """★ Measured false positive.
+
+    An ordinary covering letter — "Happy to talk this week", "If that is a hard
+    requirement" — had `Happy` and `If` reported as "named thing(s) the resume
+    does not support". The old rule skipped only the FIRST word of the whole
+    text, so in anything longer than one sentence every sentence opener read as
+    a capability claim. A warning on every letter is how a person learns to
+    ignore the warnings, and the warnings are the product.
+    """
+    from app.engine.validator import entities
+
+    body = ("I write Python day to day. If that is a hard requirement, I would "
+            "rather know now. Happy to talk this week.")
+    found = entities(body)
+    assert "python" in found
+    assert "happy" not in found
+    assert "if" not in found
+    assert "would" not in found
+
+
+def test_a_real_name_mid_sentence_is_still_caught():
+    """The fix must not turn the check off."""
+    from app.engine.validator import entities
+
+    found = entities("I have not worked with Kubernetes, so I have not "
+                     "claimed it.")
+    assert "kubernetes" in found
+
+
+def test_an_acronym_or_tool_shaped_token_counts_anywhere():
+    """Position-awareness applies to ordinary capitals only. `SQL` opening a
+    sentence is still `SQL`."""
+    from app.engine.validator import entities
+
+    assert "sql" in entities("Built reports. SQL was the main tool.")
+    assert "node.js" in entities("Services run on Node.js in production.")
+
+
+def test_every_line_of_a_bullet_list_is_a_sentence_start():
+    """A bullet list has no full stops and every line begins with a capital."""
+    from app.engine.validator import entities
+
+    found = entities("Skills\n- Python and SQL\n- Please see the appendix")
+    assert "python" in found
+    assert "please" not in found

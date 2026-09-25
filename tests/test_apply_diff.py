@@ -284,3 +284,54 @@ def test_every_change_is_attributable_to_an_op():
     d = build_diff(base, apply_ops(base, ops), ops)
     assert {c.op_id for c in d.changes} == {"a", "b", "c"}
     assert all(c.ref_id for c in d.changes)
+
+
+# ══ the resume's own spelling survives ════════════════════════════════
+
+def test_applying_set_skills_restores_the_resumes_own_capitalisation():
+    """The planner reads a lowercased inventory and echoes it back.
+
+    On a real run the accepted op contained `python fastapi` and `n8n` where
+    the page said `Python FastAPI`. Applying that verbatim would quietly
+    downcase a candidate's resume, so the applier maps every known skill back
+    to the form the document prints.
+    """
+    from app.domain.models import Bullet, Item, ResumeDoc, Section
+    from app.domain.ops import SetSkills, SkillGroup
+    from app.engine.apply import apply_ops
+
+    doc = ResumeDoc(sections=[Section(
+        id="sec.skills", kind="skills", heading="SKILLS", items=[
+            Item(id="skl.1", title="Backend", bullets=[Bullet(
+                id="skl.1.b.1", text="Python FastAPI, Flask, ONNX, n8n")]),
+        ])])
+
+    out = apply_ops(doc, [SetSkills(op_id="1", groups=[
+        SkillGroup(label="Automation", skills=["n8n", "python fastapi"]),
+        SkillGroup(label="Other", skills=["flask", "onnx"]),
+    ])])
+
+    printed = " | ".join(
+        b.text for s in out.sections for i in s.items for b in i.bullets)
+    assert "Python FastAPI" in printed
+    assert "Flask" in printed and "ONNX" in printed
+    assert "python fastapi" not in printed
+    # The order the planner asked for is still honoured.
+    assert printed.index("n8n") < printed.index("Python FastAPI")
+
+
+def test_a_genuinely_new_skill_keeps_the_planners_spelling():
+    """Only known skills are remapped; nothing else is touched."""
+    from app.domain.models import Bullet, Item, ResumeDoc, Section
+    from app.domain.ops import SetSkills, SkillGroup
+    from app.engine.apply import apply_ops
+
+    doc = ResumeDoc(sections=[Section(
+        id="sec.skills", kind="skills", heading="SKILLS", items=[
+            Item(id="skl.1", title="Backend",
+                 bullets=[Bullet(id="skl.1.b.1", text="Python FastAPI")])])])
+
+    out = apply_ops(doc, [SetSkills(op_id="1", groups=[
+        SkillGroup(label="Backend", skills=["Python FastAPI", "Pydantic"])])])
+    printed = out.section_of_kind("skills").items[0].bullets[0].text
+    assert printed == "Python FastAPI, Pydantic"

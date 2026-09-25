@@ -80,8 +80,25 @@ set_summary {text, cites}
   that cite nothing ("passionate", "results-driven", "proven track record").
 
 set_skills {groups}
-  Regroup and reorder skills so the ones this job asks for come first.
-  Every skill must appear in `grounding`. You may not add one.
+  Rearrange the skills section so this job's skills are read first.
+
+  KEEP EVERY SKILL. This op REPLACES the whole section, so any skill you leave
+  out is deleted from the candidate's resume. Their other specialisms are not
+  noise — a recruiter who wanted only this job's keywords would not be reading
+  a resume. An op that drops a skill is rejected.
+
+  What you SHOULD do:
+    - Put the group holding this job's skills first, and that job's skills
+      first within it.
+    - Merge, split or rename groups so the result reads as one coherent list.
+      A heading you invent is fine if it honestly describes what is under it.
+    - Everything else follows, in a sensible order.
+
+  Rules:
+    - Every group needs a heading. Never an empty label.
+    - A skill belongs to exactly one group.
+    - Every skill must appear in `grounding`. You may not add one.
+    - Write skills the way the resume writes them.
 
 drop_bullet {bullet_id, reason}
   Remove a line that is genuinely irrelevant here. Use sparingly — space is
