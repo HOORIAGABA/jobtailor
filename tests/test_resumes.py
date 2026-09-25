@@ -324,7 +324,11 @@ def api(tmp_path, monkeypatch) -> TestClient:
     monkeypatch.setenv("DEV_USER_EMAIL", "dev@example.com")
     db_session.reset(f"sqlite+pysqlite:///{tmp_path / 'api.db'}")
     create_all(db_session.engine())
-    yield TestClient(create_app(tmp_path / "runs", read_only=True))
+    # `read_only=False` because every test using this fixture UPLOADS, EDITS or
+    # CONFIRMS. It said True until read-only was actually enforced, which meant
+    # the suite was asserting that a read-only instance accepts writes — the
+    # opposite of what the flag means. It passed because nothing checked.
+    yield TestClient(create_app(tmp_path / "runs", read_only=False))
     db_session.reset()
 
 
@@ -405,3 +409,47 @@ def test_upload_refuses_when_no_model_is_configured(api: TestClient, monkeypatch
     response = api.post("/api/resumes",
                         files={"file": ("cv.txt", RESUME_BYTES, "text/plain")})
     assert response.status_code in (400, 503)
+
+
+def test_a_read_only_instance_refuses_every_write(tmp_path, monkeypatch):
+    """★ Read-only has to mean read-only.
+
+    Exactly one endpoint checked the flag — POST /api/runs — so a visitor to a
+    public instance could still confirm a resume, approve a draft and press
+    send. With the console backend nothing would leave the machine, but the
+    state would change under whoever else was looking at it, and "read-only"
+    would be a claim the software did not keep.
+
+    Enforced as middleware, so a route added later cannot forget to opt in.
+    """
+    from app.api.main import create_app
+    from app.db import session as db_session
+
+    monkeypatch.setenv("DEV_USER_EMAIL", "dev@example.com")
+    db_session.reset(f"sqlite+pysqlite:///{tmp_path / 'ro.db'}")
+    create_all(db_session.engine())
+    client = TestClient(create_app(tmp_path / "runs", read_only=True))
+
+    # Reading is exactly what it is for.
+    assert client.get("/api/resumes").status_code == 200
+    assert client.get("/api/capabilities").status_code == 200
+
+    writes = [
+        ("POST", "/api/resumes"),
+        ("PUT", "/api/resumes/whatever/draft"),
+        ("POST", "/api/resumes/whatever/confirm"),
+        ("POST", "/api/resumes/whatever/reparse"),
+        ("POST", "/api/runs"),
+        ("POST", "/api/runs/whatever/decision"),
+        ("POST", "/api/runs/whatever/send"),
+        ("DELETE", "/api/auth/google"),
+    ]
+    for method, path in writes:
+        response = client.request(method, path, json={})
+        assert response.status_code == 403, f"{method} {path} was allowed"
+        assert "cannot change anything" in response.json()["detail"]
+
+    # Signing out is the one exception: it clears a cookie the browser already
+    # has, and a demo you cannot sign out of is a demo that has trapped you.
+    assert client.post("/api/auth/logout").status_code == 200
+    db_session.reset()

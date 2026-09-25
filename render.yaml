@@ -55,6 +55,17 @@ services:
       - key: JOBTAILOR_READ_ONLY
         value: "true"
 
+      # Gives an anonymous visitor the seeded demo account, so the public URL
+      # shows the product instead of an empty list. It resolves ONLY on a
+      # read-only instance, and a read-only instance refuses every unsafe HTTP
+      # method — so the worst a visitor can do with it is read. On a writable
+      # instance this variable does nothing at all, which is what stops it
+      # being DEV_USER_EMAIL wearing a disguise.
+      #
+      # Seed it with: python -m scripts.demo_seed
+      - key: DEMO_USER_EMAIL
+        value: demo@jobtailor.example
+
       # The UI's origin. A wildcard cannot work here: browsers reject a
       # credentialed response whose Access-Control-Allow-Origin is `*`, and
       # `config.check` refuses it rather than letting sign-in break silently.

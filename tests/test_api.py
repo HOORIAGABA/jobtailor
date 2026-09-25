@@ -275,3 +275,74 @@ def test_an_unset_flag_falls_back_to_whether_a_model_is_reachable(tmp_path,
 
     monkeypatch.delenv(READ_ONLY_ENV, raising=False)
     assert create_app(tmp_path).state.read_only is True     # no model here
+
+
+def test_a_read_only_instance_shows_the_seeded_demo_to_anyone(tmp_path,
+                                                              monkeypatch):
+    """★ A public demo has a problem the local app does not.
+
+    Every run belongs to a user, and a visitor who has not signed in is nobody —
+    so without an identity they see an empty list and conclude the product does
+    nothing. Which is a poor advertisement for a product whose whole pitch is
+    that it shows its work.
+    """
+    from app.api.main import DEMO_EMAIL_ENV
+    from app.db import models, session as db_session
+    from app.db.session import create_all, session_scope
+
+    monkeypatch.delenv("DEV_USER_EMAIL", raising=False)
+    monkeypatch.setenv(DEMO_EMAIL_ENV, "demo@jobtailor.example")
+    db_session.reset(f"sqlite+pysqlite:///{tmp_path / 'demo.db'}")
+    create_all(db_session.engine())
+
+    with session_scope() as s:
+        s.add(models.User(google_sub="demo-synthetic",
+                          email="demo@jobtailor.example", name="Demo"))
+
+    client = TestClient(create_app(tmp_path / "runs", read_only=True))
+    body = client.get("/api/auth/me")
+    assert body.status_code == 200
+    assert body.json()["email"] == "demo@jobtailor.example"
+    db_session.reset()
+
+
+def test_the_demo_identity_does_nothing_on_a_writable_instance(tmp_path,
+                                                               monkeypatch):
+    """★ This is what stops it being DEV_USER_EMAIL wearing a disguise.
+
+    On a writable instance it resolves nothing at all, so it can never be the
+    thing that lets a stranger upload a resume, approve a draft or press send.
+    """
+    from app.api.main import DEMO_EMAIL_ENV
+    from app.db import models, session as db_session
+    from app.db.session import create_all, session_scope
+
+    monkeypatch.delenv("DEV_USER_EMAIL", raising=False)
+    monkeypatch.setenv(DEMO_EMAIL_ENV, "demo@jobtailor.example")
+    db_session.reset(f"sqlite+pysqlite:///{tmp_path / 'writable.db'}")
+    create_all(db_session.engine())
+
+    with session_scope() as s:
+        s.add(models.User(google_sub="demo-synthetic",
+                          email="demo@jobtailor.example", name="Demo"))
+
+    client = TestClient(create_app(tmp_path / "runs", read_only=False))
+    assert client.get("/api/auth/me").status_code == 401
+    db_session.reset()
+
+
+def test_the_demo_identity_is_never_created_only_found(tmp_path, monkeypatch):
+    """If the account has not been seeded there is no demo, and the caller gets
+    its 401 rather than an empty account that looks like a bug."""
+    from app.api.main import DEMO_EMAIL_ENV
+    from app.db import session as db_session
+    from app.db.session import create_all
+
+    monkeypatch.delenv("DEV_USER_EMAIL", raising=False)
+    monkeypatch.setenv(DEMO_EMAIL_ENV, "nobody@jobtailor.example")
+    db_session.reset(f"sqlite+pysqlite:///{tmp_path / 'empty.db'}")
+    create_all(db_session.engine())
+
+    client = TestClient(create_app(tmp_path / "runs", read_only=True))
+    assert client.get("/api/auth/me").status_code == 401
+    db_session.reset()

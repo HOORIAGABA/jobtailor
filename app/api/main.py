@@ -35,6 +35,7 @@ from typing import Any
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.api import auth as auth_router
 from app.api import gate as gate_router
@@ -52,6 +53,20 @@ RUNS_DIR = Path("runs")
 # Set on a deployment to serve stored runs and refuse to start new ones. See
 # `create_app` for why this is explicit rather than inferred.
 READ_ONLY_ENV = "JOBTAILOR_READ_ONLY"
+
+# Set on a read-only instance to give anonymous visitors an identity, so a
+# public demo can show the runs it was seeded with. It resolves ONLY when the
+# instance is read-only, which is what stops it becoming `DEV_USER_EMAIL` with
+# a new name: on a writable instance it does nothing at all, so it cannot be
+# the thing that lets a stranger upload, approve or send.
+DEMO_EMAIL_ENV = "DEMO_USER_EMAIL"
+
+# Methods that cannot change anything, so a read-only instance may serve them.
+SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
+
+# The one exception. Signing out only clears a cookie the browser already has,
+# and a demo you cannot sign out of is a demo that has trapped you.
+ALWAYS_ALLOWED = frozenset({"/api/auth/logout"})
 
 MEDIA = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -101,6 +116,31 @@ def create_app(
         version="0.1.0",
     )
     app.state.read_only = app_state_read_only
+
+    # ★ Read-only has to mean read-only, and until this existed it did not.
+    #
+    # Exactly one endpoint checked the flag — `POST /api/runs` — so on a public
+    # instance a visitor could still confirm a resume, approve a draft and press
+    # send. With the console backend nothing would leave the machine, but the
+    # state would change under whoever else was looking at it, and "read-only"
+    # would be a claim the software did not keep.
+    #
+    # Middleware rather than a dependency on each route: a route that has to
+    # remember to opt in is a route that will forget, and the one that forgets
+    # will be the one added last, by someone who did not read this comment.
+    @app.middleware("http")
+    async def refuse_writes_when_read_only(request, call_next):
+        if (app_state_read_only
+                and request.method not in SAFE_METHODS
+                and request.url.path not in ALWAYS_ALLOWED):
+            return JSONResponse(
+                status_code=403,
+                content={"detail":
+                         "This instance serves stored runs and cannot change "
+                         "anything. Run JobTailor locally to tailor a resume — "
+                         "it needs a model on the same machine."},
+            )
+        return await call_next(request)
 
     # `allow_origins=["*"]` was correct while nothing here was private, and is
     # now impossible: a browser refuses to send cookies to a wildcard origin, so

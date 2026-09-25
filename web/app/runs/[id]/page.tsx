@@ -257,8 +257,8 @@ export default function RunPage() {
                 {preview.changes.map((change, i) => (
                   <li key={change.op_id ?? i} className="text-sm">
                     <div className="text-xs" style={{ color: "var(--ink-faint)" }}>
-                      {change.op ?? change.kind}
-                      {change.where ? ` · ${change.where}` : ""}
+                      {change.op_kind}
+                      {change.label ? ` · ${change.label}` : ` · ${change.ref_id}`}
                     </div>
                     {change.before && (
                       <p
@@ -276,9 +276,15 @@ export default function RunPage() {
                         {change.after}
                       </p>
                     )}
-                    {change.why && (
+                    {change.rationale && (
                       <p className="mt-1 text-xs" style={{ color: "var(--ink-soft)" }}>
-                        {change.why}
+                        {change.rationale}
+                      </p>
+                    )}
+                    {change.cites && change.cites.length > 0 && (
+                      <p className="mt-0.5 font-mono text-xs"
+                         style={{ color: "var(--ink-faint)" }}>
+                        supported by {change.cites.join(", ")}
                       </p>
                     )}
                   </li>
@@ -299,15 +305,18 @@ export default function RunPage() {
               <ul className="mt-3 space-y-1 text-sm">
                 {preview.gaps.map((gap, i) => (
                   <li key={i}>
-                    <span className="font-medium">
-                      {gap.requirement ?? "requirement"}
-                    </span>
-                    {gap.why || gap.note ? (
+                    <span className="font-medium">{gap.requirement}</span>
+                    {gap.severity && (
                       <span style={{ color: "var(--ink-soft)" }}>
-                        {" "}
-                        — {gap.why ?? gap.note}
+                        {" "}— {gap.severity.replace(/_/g, " ")}
                       </span>
-                    ) : null}
+                    )}
+                    {gap.closest_evidence && gap.closest_evidence.length > 0 && (
+                      <span className="font-mono text-xs"
+                            style={{ color: "var(--ink-faint)" }}>
+                        {" "}closest: {gap.closest_evidence.join(", ")}
+                      </span>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -316,9 +325,16 @@ export default function RunPage() {
 
           {preview.questions.length > 0 && (
             <Card title="Worth answering before you apply">
-              <ul className="list-disc space-y-1 ps-5 text-sm">
+              <ul className="space-y-3 text-sm">
                 {preview.questions.map((q, i) => (
-                  <li key={i}>{q}</li>
+                  <li key={i}>
+                    <p>{q.question}</p>
+                    {q.context && (
+                      <p className="mt-1 text-xs" style={{ color: "var(--ink-faint)" }}>
+                        about: {q.context}
+                      </p>
+                    )}
+                  </li>
                 ))}
               </ul>
             </Card>
@@ -333,8 +349,13 @@ export default function RunPage() {
               <ul className="mt-3 space-y-1 text-sm">
                 {preview.rejections.map((r, i) => (
                   <li key={i}>
-                    <span className="font-mono text-xs">{r.rule}</span>
-                    {r.why ? ` — ${r.why}` : ""}
+                    <span className="font-mono text-xs">{r.code}</span>
+                    {r.op_kind ? (
+                      <span style={{ color: "var(--ink-faint)" }}>
+                        {" "}on {r.op_kind}
+                      </span>
+                    ) : null}
+                    {r.detail ? ` — ${r.detail}` : ""}
                   </li>
                 ))}
               </ul>

@@ -18,6 +18,7 @@ import os
 from typing import Iterator
 
 from fastapi import Depends, HTTPException, Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.config import DEV_EMAIL_ENV, Settings
@@ -88,6 +89,11 @@ def current_user(request: Request,
         email = ""
 
     if not email:
+        demo = _demo_user(request, session)
+        if demo is not None:
+            request.state.user_email = demo.email
+            return demo
+
         raise HTTPException(
             401,
             "Not signed in. Sign in at /api/auth/google/start, or set "
@@ -95,21 +101,82 @@ def current_user(request: Request,
             f"only — it is ignored when ENVIRONMENT=production).",
         )
 
-    user = session.query(User).filter(User.google_sub == DEV_SUB).one_or_none()
-    if user is None:
-        user = User(google_sub=DEV_SUB, email=email, name=email.split("@")[0])
-        session.add(user)
-        # Committed here, not merely flushed. Identity is not part of the work
-        # the request is doing, so it must survive that work failing — and a
-        # flush alone does not: any request that raises rolls the session back,
-        # the row vanishes, and the NEXT request creates the user again with a
-        # NEW id. Anything keyed on the user id then sees a different person
-        # every time, which quietly defeated the rate limiter on exactly the
-        # endpoints most likely to fail.
-        session.commit()
-        logger.info("Created the local development user %s", email)
+    user = _get_or_create_dev_user(session, email)
     request.state.user_email = user.email
     return user
+
+
+def _demo_user(request: Request, session: Session) -> User | None:
+    """The seeded demo account, on a read-only instance only.
+
+    A public demo has a problem the local app does not: every run belongs to a
+    user, and a visitor who has not signed in is nobody. Without this they see
+    an empty list and conclude the product does nothing — which is a poor
+    advertisement for a product whose whole pitch is that it shows its work.
+
+    **The read-only check is what stops this being `DEV_USER_EMAIL` wearing a
+    disguise.** On a writable instance it resolves nothing at all, so it can
+    never be the thing that lets a stranger upload a resume, approve a draft or
+    press send. On a read-only instance the middleware in `api.main` refuses
+    every unsafe method anyway, so the worst an anonymous visitor can do with
+    this identity is read the runs it was seeded with — which is the entire
+    point of it.
+
+    It also never creates anything. If the account has not been seeded, there is
+    no demo and the caller gets its 401.
+    """
+    import os
+
+    from app.api.main import DEMO_EMAIL_ENV
+
+    if not getattr(request.app.state, "read_only", False):
+        return None
+    email = (os.environ.get(DEMO_EMAIL_ENV) or "").strip()
+    if not email:
+        return None
+    return session.query(User).filter(User.email == email).first()
+
+
+def _get_or_create_dev_user(session: Session, email: str) -> User:
+    """Find the development user, creating it once across concurrent requests.
+
+    **Committed, not merely flushed.** Identity is not part of the work the
+    request is doing, so it must survive that work failing — and a flush alone
+    does not: any request that raises rolls the session back, the row vanishes,
+    and the NEXT request creates the user again with a NEW id. Anything keyed on
+    the user id then sees a different person every time, which quietly defeated
+    the rate limiter on exactly the endpoints most likely to fail.
+
+    **And the insert races.** One page load fires several requests at once —
+    `/api/auth/me`, `/api/capabilities`, the run — and on a cold database they
+    all find no user, all insert, and all but one get
+
+        IntegrityError: UNIQUE constraint failed: users.google_sub
+
+    which surfaces as a 500 on whichever request lost. Found by loading the demo
+    in a browser; a test that makes one request at a time can never see it.
+
+    The unique constraint is doing its job, so the fix is to treat losing the
+    race as the ordinary outcome it is: roll back and read the row the winner
+    wrote.
+    """
+    user = session.query(User).filter(User.google_sub == DEV_SUB).one_or_none()
+    if user is not None:
+        return user
+
+    session.add(User(google_sub=DEV_SUB, email=email,
+                     name=email.split("@")[0]))
+    try:
+        session.commit()
+        logger.info("Created the local development user %s", email)
+    except IntegrityError:
+        session.rollback()
+        logger.debug("Lost the race to create the development user; reading it")
+
+    found = session.query(User).filter(User.google_sub == DEV_SUB).one_or_none()
+    if found is None:                                     # pragma: no cover
+        raise HTTPException(500, "could not resolve the development user")
+    return found
 
 
 def owned_resume(resume_id: str, session: Session, user: User) -> Resume:

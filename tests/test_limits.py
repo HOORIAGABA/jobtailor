@@ -177,3 +177,31 @@ def test_the_development_user_survives_a_failing_request(api: TestClient):
 
     with session_scope() as s:
         assert s.query(models.User).count() == 1
+
+
+def test_concurrent_first_requests_create_one_development_user(api: TestClient):
+    """★ Found by loading the demo in a browser, not by a test.
+
+    One page load fires several requests at once — /api/auth/me,
+    /api/capabilities, the run — and on a cold database they all found no user,
+    all inserted, and all but one got
+
+        IntegrityError: UNIQUE constraint failed: users.google_sub
+
+    as a 500. A test that makes one request at a time can never see it. The
+    unique constraint was doing its job; losing the race just had to be treated
+    as the ordinary outcome it is.
+    """
+    import concurrent.futures
+
+    with session_scope() as s:
+        s.query(models.User).delete()
+
+    paths = ["/api/auth/me", "/api/capabilities", "/api/resumes",
+             "/api/runs", "/api/auth/me", "/api/resumes"]
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(paths)) as pool:
+        codes = list(pool.map(lambda p: api.get(p).status_code, paths))
+
+    assert all(code == 200 for code in codes), codes
+    with session_scope() as s:
+        assert s.query(models.User).count() == 1

@@ -127,22 +127,61 @@ export interface RunDetail extends RunSummary {
   may_send: boolean;
 }
 
+/**
+ * These mirror `app/engine/diff.py` field for field.
+ *
+ * They did not, and the cost was the gate screen — the most important page in
+ * the product. `questions` was typed as `string[]` and is a list of objects, so
+ * React was handed an object as a child and the whole page threw. Behind that
+ * crash, three more were silently wrong: `op`/`where`/`why` on a change are
+ * really `op_kind`/`label`/`rationale`, a gap's explanation is `severity` and
+ * `closest_evidence` rather than `note`/`why`, and a rejection's are `code` and
+ * `detail` rather than `rule`/`why`.
+ *
+ * Every one of those renders as `undefined` — which React prints as nothing.
+ * The diff would have shown its changes with no reason attached, on a product
+ * whose entire claim is that every change carries its reason.
+ *
+ * None of it was caught by the type checker, because the types were written
+ * from memory rather than read off the API. They were only caught by rendering
+ * real pipeline output.
+ */
 export interface Change {
-  op_id?: string;
-  op?: string;
-  kind?: string;
-  where?: string;
+  op_id: string;
+  op_kind: string;
+  ref_id: string;
+  label?: string;
   before?: string;
   after?: string;
-  why?: string;
+  rationale?: string;
   cites?: string[];
+}
+
+export interface Gap {
+  requirement: string;
+  severity?: string;
+  closest_evidence?: string[];
+}
+
+export interface Question {
+  bullet_id?: string;
+  context?: string;
+  question?: string;
+}
+
+export interface Rejection {
+  op_id?: string;
+  op_kind?: string;
+  code?: string;
+  detail?: string;
+  ask_user?: boolean;
 }
 
 export interface Diff {
   changes?: Change[];
-  gaps?: { requirement?: string; note?: string; why?: string }[];
-  questions?: string[];
-  rejections?: { op_id?: string; rule?: string; why?: string }[];
+  gaps?: Gap[];
+  questions?: Question[];
+  rejections?: Rejection[];
 }
 
 export interface Outreach {
@@ -165,9 +204,9 @@ export interface Preview {
   problems: string[];
   cites: string[];
   changes: Change[];
-  gaps: { requirement?: string; note?: string; why?: string }[];
-  questions: string[];
-  rejections: { op_id?: string; rule?: string; why?: string }[];
+  gaps: Gap[];
+  questions: Question[];
+  rejections: Rejection[];
   standing: { demonstrated?: string[]; declared_only?: string[]; not_found?: string[] };
   confirm_token: string;
   can_download: boolean;
