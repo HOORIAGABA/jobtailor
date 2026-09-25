@@ -330,11 +330,24 @@ class SendAudit(Base):
 
     Hashes, not contents: the audit answers "was this sent, to whom, when" and
     does not need a second copy of the message body to do it.
+
+    **`seq` is what makes it readable, and `attempted_at` is not enough.** The
+    whole value of this table is the ORDER — "attempted, then sent" and
+    "attempted, then unknown" are the same two rows and opposite conclusions.
+    Those rows are written milliseconds apart, and `datetime.now()` advances in
+    ~15.6 ms steps on Windows, so both landed on the same timestamp and the
+    tie-break fell to a random hex id. The audit came out in a random order on
+    every send, on the platform this is developed on.
+
+    A per-message counter says the true thing without consulting a clock: this
+    was the 1st, 2nd, 3rd thing that happened to this message. It survives a
+    process restart, which a module-level counter would not.
     """
     __tablename__ = "send_audit"
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)
+    seq: Mapped[int] = mapped_column(Integer, default=0)
     recipient: Mapped[str] = mapped_column(String(320))
     subject_hash: Mapped[str] = mapped_column(String(64))
     body_hash: Mapped[str] = mapped_column(String(64))

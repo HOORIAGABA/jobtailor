@@ -252,9 +252,17 @@ def _audit(session: Session, message: Message, outgoing: OutgoingMessage,
     text" — and does not need a second copy of the body to do it. A new row per
     outcome rather than an update, because a row that can be edited is not an
     audit.
+
+    `seq` is counted rather than timed. See `SendAudit`: these rows land
+    milliseconds apart and a 15.6 ms clock cannot separate them, which left the
+    order to a random id. Counting the rows already there is exact everywhere
+    and survives a restart.
     """
+    written = (session.query(SendAudit)
+               .filter(SendAudit.message_id == message.id).count())
     session.add(SendAudit(
         message_id=message.id,
+        seq=written + 1,
         recipient=outgoing.recipient,
         subject_hash=outgoing.subject_hash(),
         body_hash=outgoing.body_hash(),

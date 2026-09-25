@@ -239,8 +239,10 @@ def _audit(session, run) -> list[tuple[str, str]]:
     message = gate.message_of(session, run)
     rows = (session.query(models.SendAudit)
             .filter(models.SendAudit.message_id == message.id)
-            .order_by(models.SendAudit.attempted_at,
-                      models.SendAudit.id).all())
+            # By `seq`, never by the timestamp: the two rows land milliseconds
+            # apart and a 15.6 ms clock ties them, which left the order to a
+            # random id. The audit's whole value is the order.
+            .order_by(models.SendAudit.seq).all())
     return [(r.outcome, r.recipient) for r in rows]
 
 
@@ -815,3 +817,59 @@ def test_the_approved_message_over_http_round_trips_into_a_send(api: TestClient)
         "body": fetched["body"], "confirm_token": fetched["confirm_token"]})
     assert sent.status_code == 200
     assert api.get(f"/api/runs/{run_id}/approved").status_code == 409
+
+
+def test_the_audit_order_survives_identical_timestamps(db):
+    """★ Found on Windows, and it is the worst place in the schema for it.
+
+    `attempted` and `sent` are written milliseconds apart, and `datetime.now()`
+    advances in ~15.6 ms steps there — so both rows took the SAME timestamp and
+    the tie-break fell to a random hex id. The audit came out in a random order
+    on every send.
+
+    "attempted then sent" and "attempted then unknown" are the same two rows and
+    opposite conclusions, and the person reading them is trying to work out
+    whether an application actually went out.
+
+    Rather than fight SQLAlchemy's column default to fake a coarse clock, this
+    forces the tie the coarse clock produces and asserts the order is still
+    unambiguous — which is the property that matters.
+    """
+    from datetime import datetime, timezone
+
+    tied = datetime(2026, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+
+    with session_scope() as s:
+        run = _approved(s)
+        _send(s, run)
+
+        message_id = gate.message_of(s, run).id
+        rows = (s.query(models.SendAudit)
+                .filter(models.SendAudit.message_id == message_id).all())
+        for row in rows:
+            row.attempted_at = tied          # what a 15.6 ms clock produces
+        s.flush()
+
+        ordered = (s.query(models.SendAudit)
+                   .filter(models.SendAudit.message_id == message_id)
+                   .order_by(models.SendAudit.seq).all())
+        assert [r.seq for r in ordered] == [1, 2]
+        assert [r.outcome for r in ordered] == ["attempted", "sent"]
+
+
+def test_a_second_attempt_continues_the_sequence(db):
+    """A retry after a refusal appends; it does not restart at 1. Counting the
+    rows already there is what makes that true across a process restart, which
+    a module-level counter would not survive."""
+    with session_scope() as s:
+        run = _approved(s)
+        with pytest.raises(SendFailed):
+            _send(s, run, _Declines())
+        _send(s, run, ConsoleSender())
+
+        rows = (s.query(models.SendAudit)
+                .filter(models.SendAudit.message_id ==
+                        gate.message_of(s, run).id)
+                .order_by(models.SendAudit.seq).all())
+        assert [(r.seq, r.outcome) for r in rows] == [
+            (1, "attempted"), (2, "refused"), (3, "attempted"), (4, "sent")]

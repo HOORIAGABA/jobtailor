@@ -31,9 +31,9 @@ SOURCE_DIRS = ("app", "tests", "scripts", "evals", "migrations", "web/app",
 SOURCE_SUFFIXES = {".py", ".ts", ".tsx", ".css", ".json", ".mjs", ".yml"}
 
 
-def _git(*args: str) -> subprocess.CompletedProcess:
+def _git(*args: str, stdin: str = "") -> subprocess.CompletedProcess:
     return subprocess.run(["git", *args], cwd=ROOT, capture_output=True,
-                          text=True)
+                          text=True, input=stdin or None)
 
 
 @pytest.fixture(scope="module")
@@ -68,9 +68,17 @@ def test_no_source_file_is_invisible_to_git(in_a_git_checkout):
     assert candidates, "found no source files to check — the paths are wrong"
 
     relative = [str(p.relative_to(ROOT)).replace("\\", "/") for p in candidates]
+
+    # Paths go in on STDIN, not as arguments. Windows caps a command line at
+    # 32767 characters, and this list grows with the repo — roughly 200 paths
+    # today. Passing them as arguments works until one day it silently does
+    # not, on one platform, which is the exact shape of failure this whole file
+    # exists because of.
+    #
     # `check-ignore` exits 0 when it ignored something, 1 when it ignored
     # nothing. 1 is the pass.
-    done = _git("check-ignore", "--no-index", *relative)
+    done = _git("check-ignore", "--no-index", "--stdin",
+                stdin="\n".join(relative) + "\n")
     ignored = [line for line in done.stdout.splitlines() if line.strip()]
 
     assert not ignored, (
