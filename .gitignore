@@ -18,9 +18,19 @@ venv/
 *.key
 *.pem
 
-# Data / artifacts
-data/
-outputs/
+# Data / artifacts.
+#
+# ANCHORED with a leading slash. Without one, git matches the name at ANY
+# depth — and `runs/` silently swallowed `web/app/runs/`, the Next.js route
+# holding the progress, gate and send screens. 137 files were committed and
+# the two most important pages in the product were not among them; nothing
+# failed, because `next build` is perfectly happy to build an app with fewer
+# routes than you thought it had.
+/data/
+/outputs/
+
+# NOT anchored, deliberately: `out/` is Next.js's export directory and can sit
+# under web/ as well as at the root.
 out/
 
 # The sidecars matter as much as the database. `*.db` does NOT match
@@ -38,7 +48,10 @@ out/
 # a name, an address, a phone number, an employment history. v1 kept exactly
 # this kind of folder at the repo root WITHOUT ignoring it, so real resume
 # PDFs were one `git add -A` from being public.
-runs/
+#
+# Anchored. See the note above: the unanchored form also matched the
+# frontend's /runs route.
+/runs/
 
 # Cached stage results. A cached parse is the full text of a resume, so this
 # is personal data for the same reason runs/ is.
