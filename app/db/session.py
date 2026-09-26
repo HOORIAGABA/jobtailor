@@ -41,22 +41,115 @@ logger = logging.getLogger(__name__)
 
 DEFAULT_URL = "sqlite+pysqlite:///jobtailor.db"
 
+# ★ `.env`, read here as a fallback — and the reason is a bug, not convenience.
+#
+# This module deliberately reads the process environment rather than `Settings`,
+# and for a while that was the whole story. But `Settings` has a `database_url`
+# field and loads `.env`, and pydantic-settings parses that file into the model
+# **without exporting anything to `os.environ`**. So putting `DATABASE_URL` in
+# `.env` — the obvious place, the place the file exists for — produced two
+# different answers to one question:
+#
+#     Settings().database_url   → postgresql+psycopg://…neon…    (read .env)
+#     session.database_url()    → sqlite+pysqlite:///jobtailor.db (read os.environ)
+#
+# Nothing failed. `alembic upgrade head` migrated the local SQLite file and
+# printed success, the production database stayed empty, and the first symptom
+# was a deployed `GET /` naming missing tables with no hint as to why. That is
+# I3 — one producer per fact class — violated for the single most consequential
+# fact in the system: which database is this.
+#
+# So the fallback exists to make the two agree. It is parsed by hand rather than
+# by importing `Settings`, which keeps the property the docstring below is about:
+# a migration must work in a checkout with no model configured.
+#
+# `ENV_FILE = None` detaches it, and `tests/conftest.py` does exactly that, for
+# the same reason it detaches `Settings`: a test must never read the developer's
+# `.env`. Without that line, a developer whose `.env` points at production would
+# have the suite point there too.
+ENV_FILE: Path | None = Path(__file__).resolve().parents[2] / ".env"
+
+
+def _dotenv_database_url() -> str:
+    """`DATABASE_URL` out of `.env`, or `""`.
+
+    A deliberately small parser: `KEY=value`, `#` comments, optional matching
+    quotes. It is not a dotenv implementation and does not want to be — the one
+    key it reads is the one whose absence is silent.
+    """
+    path = ENV_FILE
+    if path is None or not path.is_file():
+        return ""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:                                        # unreadable is absent
+        return ""
+
+    for raw in text.splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        if key.strip().upper() != "DATABASE_URL":
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        return value.strip()
+    return ""
+
+
+# The schemes that mean "Postgres, driver unspecified". Both get the driver
+# named, because SQLAlchemy's default for an unqualified `postgresql://` is
+# **psycopg2** — the 2 — and this project depends on psycopg 3.
+#
+# ★ `postgresql://` was missing from this list, and the cost was a traceback that
+# points at the wrong thing entirely:
+#
+#     File ".../sqlalchemy/dialects/postgresql/psycopg2.py", line 690
+#     ModuleNotFoundError: No module named 'psycopg2'
+#
+# Nothing in that says "your URL does not name a driver". It reads as a missing
+# dependency, so the obvious response is `pip install psycopg2` — which installs
+# a second, unwanted Postgres driver and makes the symptom disappear for the
+# wrong reason.
+#
+# `postgres://` was handled because it is the Heroku form and the one every blog
+# post mentions. `postgresql://` is what Neon, Supabase and Render actually hand
+# you, which made the common case the broken one. DEPLOY.md papered over it with
+# an instruction to edit the scheme by hand; an instruction that exists because
+# the code is wrong is a bug with documentation on top.
+_BARE_POSTGRES_SCHEMES = ("postgres", "postgresql")
+_PREFERRED_POSTGRES_URL_SCHEME = "postgresql+psycopg"
+
+
+def normalise_url(url: str) -> str:
+    """Name the Postgres driver if the URL does not, and change nothing else.
+
+    An explicit driver is left alone — `postgresql+asyncpg://` or even
+    `postgresql+psycopg2://` is a deliberate choice and not ours to override.
+    Only the unqualified forms are rewritten.
+    """
+    scheme, separator, rest = url.partition("://")
+    if separator and scheme.lower() in _BARE_POSTGRES_SCHEMES:
+        return f"{_PREFERRED_POSTGRES_URL_SCHEME}://{rest}"
+    return url
+
 
 def database_url() -> str:
     """`DATABASE_URL`, or a SQLite file beside the project.
 
     Read from the environment directly rather than through `Settings`, because
     `Settings` validates the LLM configuration and the database has to be
-    reachable in contexts where no model is — a migration, for instance.
+    reachable in contexts where no model is — a migration, for instance. The
+    process environment wins; `.env` is the fallback, for the reason above.
+
+    **This is the one producer of the answer.** `Settings.database_url` holds the
+    raw string and is only ever checked for presence; the value used to connect
+    comes from here, normalised, so there is nowhere for the two to disagree.
     """
-    url = (os.environ.get("DATABASE_URL") or "").strip()
-    if not url:
-        return DEFAULT_URL
-    # Heroku-style URLs are still common in copy-pasted config and SQLAlchemy 2
-    # rejects the bare `postgres://` scheme.
-    if url.startswith("postgres://"):
-        url = url.replace("postgres://", "postgresql+psycopg://", 1)
-    return url
+    url = (os.environ.get("DATABASE_URL") or "").strip() or _dotenv_database_url()
+    return normalise_url(url) if url else DEFAULT_URL
 
 
 def build_engine(url: str | None = None, *, echo: bool = False) -> Engine:

@@ -23,6 +23,7 @@ from __future__ import annotations
 import pytest
 
 from app.config import Settings
+from app.db import session as db_session
 
 # Every environment variable the app reads. Cleared for the duration of the
 # suite so a shell export cannot leak in either — `.env` is the common case,
@@ -34,8 +35,16 @@ _APP_ENV_VARS = tuple(
 
 @pytest.fixture(autouse=True, scope="session")
 def _ignore_dotenv() -> None:
-    """Detach `Settings` from `.env` for the whole test session."""
+    """Detach `Settings` **and the engine** from `.env` for the whole session.
+
+    Two places read that file, and both have to be cut. `app.db.session` reads
+    `DATABASE_URL` out of `.env` as a fallback — it has to, or `Settings` and the
+    engine disagree about which database this is (see the comment there). Which
+    means that without this line, a developer whose `.env` points at Neon would
+    have `reset()` hand the suite a production engine.
+    """
     Settings.model_config["env_file"] = None
+    db_session.ENV_FILE = None
 
 
 @pytest.fixture(autouse=True)

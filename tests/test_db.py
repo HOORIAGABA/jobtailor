@@ -7,10 +7,14 @@ adds a second handler.
 """
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 from sqlalchemy.exc import IntegrityError
 
+from app.config import Settings
 from app.db import models
+from app.db import session as db_session
 from app.db.session import build_engine, create_all
 from app.domain.errors import IllegalTransition
 from app.domain.status import (
@@ -351,3 +355,120 @@ def test_the_migrations_produce_exactly_the_models(tmp_path):
         "models and migrations disagree — run "
         "`alembic revision --autogenerate -m '...'`:\n" + "\n".join(map(str, diff))
     )
+
+
+# ── which database is this ────────────────────────────────────────────────
+#
+# One question, and for a while it had two answers: `Settings` read `.env`, the
+# engine read `os.environ`, and pydantic-settings never puts one into the other.
+# Putting the production URL in `.env` therefore migrated the local SQLite file
+# and reported success. These tests exist so that cannot come back.
+
+
+def _write_env(path: Path, body: str) -> Path:
+    path.write_text(body, encoding="utf-8")
+    return path
+
+
+def test_the_process_environment_wins_over_the_env_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Order matters: a shell variable is the more deliberate of the two."""
+    monkeypatch.setattr(
+        db_session, "ENV_FILE",
+        _write_env(tmp_path / ".env", "DATABASE_URL=postgresql+psycopg://from/file\n"))
+    monkeypatch.setenv("DATABASE_URL", "postgresql+psycopg://from/shell")
+
+    assert db_session.database_url() == "postgresql+psycopg://from/shell"
+
+
+def test_the_env_file_is_read_when_the_environment_is_empty(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ The bug. Without this the answer was silently the local SQLite file."""
+    monkeypatch.setattr(
+        db_session, "ENV_FILE",
+        _write_env(tmp_path / ".env",
+                   "# a comment\n"
+                   "LLM_PROVIDER=ollama\n"
+                   'DATABASE_URL="postgresql+psycopg://u:p@host/db?sslmode=require"\n'
+                   "JWT_SECRET=whatever\n"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert db_session.database_url() == (
+        "postgresql+psycopg://u:p@host/db?sslmode=require")
+
+
+def test_settings_and_the_engine_agree_about_the_database(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The invariant itself, rather than one side of it.
+
+    I3: one producer per fact class. Two readers are allowed; two *answers* are
+    not, and this is the fact where disagreeing is most expensive.
+
+    Compared through `normalise_url` rather than byte for byte, because naming
+    the driver is a documented transformation the engine applies and `Settings`
+    does not. What is asserted is that the engine's answer is the configured
+    string and nothing else — same source, one transformation, no divergence.
+    """
+    env = _write_env(tmp_path / ".env",
+                     "DATABASE_URL=postgresql://u:p@host/db\n")
+    monkeypatch.setattr(db_session, "ENV_FILE", env)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    settings = Settings(_env_file=str(env))               # type: ignore[call-arg]
+
+    assert db_session.database_url() == db_session.normalise_url(
+        settings.database_url)
+
+
+@pytest.mark.parametrize("given", ["postgres", "postgresql"])
+def test_a_postgres_url_without_a_driver_gets_one(
+    given: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """★ Both bare forms, and `postgresql` is the one that was missing.
+
+    SQLAlchemy's default driver for an unqualified `postgresql://` is psycopg2,
+    which this project does not install — so the failure was
+    `ModuleNotFoundError: No module named 'psycopg2'` from inside a dialect
+    module, which reads as a missing dependency rather than as an unqualified
+    URL. `postgres://` was handled because it is the Heroku form every blog post
+    mentions; `postgresql://` is what Neon, Supabase and Render actually hand
+    you, so the common case was the broken one.
+    """
+    monkeypatch.setattr(
+        db_session, "ENV_FILE",
+        _write_env(tmp_path / ".env",
+                   f"DATABASE_URL={given}://u:p@ep-x-pooler.neon.tech/db?sslmode=require\n"))
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert db_session.database_url() == (
+        "postgresql+psycopg://u:p@ep-x-pooler.neon.tech/db?sslmode=require")
+
+
+@pytest.mark.parametrize("url", [
+    "postgresql+asyncpg://u:p@host/db",
+    "postgresql+psycopg2://u:p@host/db",
+    "postgresql+psycopg://u:p@host/db",
+    "sqlite+pysqlite:///local.db",
+    "mysql+pymysql://u:p@host/db",
+])
+def test_an_explicit_driver_is_left_alone(url: str) -> None:
+    """Naming a driver is a deliberate choice, including naming psycopg2.
+
+    Rewriting it would mean this function silently overrides an intention it
+    cannot see the reason for — which is the same class of helpfulness as the
+    SQLite default that started all of this.
+    """
+    assert db_session.normalise_url(url) == url
+
+
+def test_no_env_file_and_no_variable_is_the_local_sqlite_file(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A fresh checkout with no configuration still runs."""
+    monkeypatch.setattr(db_session, "ENV_FILE", None)
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+
+    assert db_session.database_url() == db_session.DEFAULT_URL

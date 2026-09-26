@@ -67,15 +67,26 @@ it drops a connection before PgBouncer does; the comment there explains why
 `prepare_threshold` is *not* set, which is the one piece of folklore you will be
 told to apply.
 
-Then change the scheme, because SQLAlchemy 2 rejects the bare form:
+**Paste it exactly as Neon gives it to you.** `db/session.py` names the driver
+for you — `postgres://` and `postgresql://` both become
+`postgresql+psycopg://`, and an explicitly named driver is left alone.
+
+This paragraph used to say "change the scheme by hand", and that instruction
+existed because the code only handled `postgres://` (the Heroku form) and not
+`postgresql://` (what Neon, Supabase and Render actually hand out). SQLAlchemy's
+default driver for an unqualified `postgresql://` is **psycopg2**, which this
+project does not install, so the failure was:
 
 ```
-postgresql://…            ← what Neon gives you
-postgresql+psycopg://…    ← what SQLAlchemy 2 needs
+File ".../sqlalchemy/dialects/postgresql/psycopg2.py", line 690
+ModuleNotFoundError: No module named 'psycopg2'
 ```
 
-(`db/session.py` rewrites a `postgres://` URL for you, but the explicit one is
-clearer in a dashboard six months later.)
+Nothing in that says "your URL does not name a driver" — it reads as a missing
+package, and the obvious response is to `pip install psycopg2`, which installs a
+second unwanted driver and makes the symptom go away for the wrong reason. Fixed
+in the code; `tests/test_db.py` covers both bare forms and asserts an explicit
+driver is never overridden.
 
 ## 2. Secrets
 
@@ -106,6 +117,19 @@ $env:DATABASE_URL = "postgresql+psycopg://…-pooler…/neondb?sslmode=require"
 python -m alembic upgrade head
 python -m alembic current          # should print the head revision
 ```
+
+**The shell variable, not `.env`, and this is a real choice.** Both work —
+`db/session.py` reads the process environment first and falls back to `.env`, and
+there is a test asserting `Settings` and the engine agree, because for a while
+they did not and `DATABASE_URL` in `.env` migrated the local SQLite file while
+reporting success.
+
+But a production URL sitting in `.env` is *persistent*. It points every later
+command at Neon — `scripts.seed`, a local `uvicorn`, the next
+`alembic upgrade head` you meant for your laptop — and none of them will mention
+it. `$env:DATABASE_URL` lives in one PowerShell window and dies with it, which is
+the right lifetime for "act on production once". If you do put it in `.env`, take
+it out again afterwards.
 
 Repeat it after any deploy that includes a new file in `migrations/versions/`.
 `GET /` on the deployed API reports `database: ready` or names the missing
