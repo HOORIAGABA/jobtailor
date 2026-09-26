@@ -3,10 +3,12 @@
  *
  * Two things here are load-bearing.
  *
- * `credentials: "include"` on every request. The session cookie is set by the
- * API on its own origin, so without this the browser holds a perfectly good
- * cookie and sends it nowhere, and every screen reports "not signed in" while
- * the network tab shows a 401 with no explanation.
+ * `credentials: "include"` on every request. Without it the browser holds a
+ * perfectly good cookie and sends it nowhere, and every screen reports "not
+ * signed in" while the network tab shows a 401 with no explanation. It is
+ * necessary but not sufficient: it says this page is willing to send the cookie,
+ * and `SameSite` on the cookie says whether the browser agrees. Both have to
+ * line up, which is what the one-origin arrangement in `next.config.mjs` is for.
  *
  * Status codes are translated into intentions, not messages. The API is careful
  * about which code it returns — 401 sign in, 428 connect Gmail, 409 the state
@@ -16,8 +18,33 @@
  * problem is that they have not connected Gmail yet.
  */
 
+/**
+ * Where the API is, from the browser's point of view.
+ *
+ * Three cases, and the middle one is the deployed one:
+ *
+ *   unset            → `http://localhost:8000`. A fresh `npm run dev` with
+ *                      uvicorn on the side, unchanged.
+ *   `/`              → `""`, so every path below is requested relative and the
+ *                      browser only ever sees this origin. `next.config.mjs`
+ *                      rewrites `/api/*` to the real API. This is what the
+ *                      deployment sets, and the reason is the whole comment at
+ *                      the top of that file: a cross-site `fetch` does not carry
+ *                      a `SameSite=Lax` cookie, so an API on its own hostname is
+ *                      an API nobody can be signed in to.
+ *   an absolute URL  → used as given. Still correct for a same-site pair such as
+ *                      two ports on localhost, and the escape hatch if the proxy
+ *                      ever has to come out.
+ *
+ * `??` and an explicit empty check rather than `||`: with `||`, setting this to
+ * `/` normalises to `""`, which is falsy, and the fallback would quietly send a
+ * production build at localhost.
+ */
+const configured = process.env.NEXT_PUBLIC_API_URL?.trim();
 export const API =
-  process.env.NEXT_PUBLIC_API_URL?.replace(/\/$/, "") || "http://localhost:8000";
+  configured === undefined || configured === ""
+    ? "http://localhost:8000"
+    : configured.replace(/\/+$/, "");
 
 /** Why a request failed, in terms the UI can branch on. */
 export type Reason =
@@ -81,8 +108,11 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   } catch {
     throw new ApiError(
       "offline",
-      `Could not reach the API at ${API}. Is it running? ` +
-        `(uvicorn app.api.main:app --reload)`,
+      API
+        ? `Could not reach the API at ${API}. Is it running? ` +
+            `(uvicorn app.api.main:app --reload)`
+        : `Could not reach the API at this origin. ${path} is proxied to ` +
+            `API_ORIGIN — check that it is set on this deployment.`,
     );
   }
 

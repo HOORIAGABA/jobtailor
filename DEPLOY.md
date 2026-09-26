@@ -1,55 +1,81 @@
 # Deploying JobTailor
 
-Two halves, two hosts, both free. The split is forced by one fact: **the model
-that makes this cheap runs on a laptop, and no serverless function can reach
-it.**
+Three pieces, all free, and one of them stays on your desk. That last part is
+forced by a single fact: **the model that makes this cheap runs on a laptop, and
+nothing on the internet can reach it.**
 
 ```
-  Vercel                    Render                    your laptop
-  ──────                    ──────                    ───────────
-  web/  (Next.js)  ──────►  app/  (FastAPI)           Ollama
-  static, instant           read-only: serves         the full app, able to
-  free forever              stored runs, refuses      start runs
-                            to start new ones
-                                  │
-                                  ▼
-                            Neon / Supabase
-                            Postgres, free
+  Vercel — project 1              Vercel — project 2         your laptop
+  ──────────────────              ──────────────────         ───────────
+  web/  (Next.js)                 app/  (FastAPI)            Ollama
+  the only origin the    ──────►  one Python function        the full app, the
+  browser ever sees      /api/*   read-only: serves          only place a run
+                                  stored runs, refuses       can start
+                                  to start new ones
+                                          │
+                                          ▼
+                                    Neon (Postgres, free)
+                                          ▲
+                                          └──────────────────────┘
+                                          the laptop writes here too
 ```
+
+The browser talks to **one** origin. `/api/*` is rewritten to the API project by
+`web/next.config.mjs`; nothing in the UI ever names the API's hostname. That is
+not tidiness, it is the only arrangement in which anyone can be signed in — see
+[One origin, and why](#one-origin-and-why).
 
 ## What the public instance honestly is
 
-It **serves runs that already happened and cannot start new ones**. That is not
-a limitation dressed up:
+It **serves runs that already happened and cannot start new ones.** Not a
+limitation dressed up:
 
 - a run takes minutes, and no HTTP request survives that;
 - the model is on a machine the internet cannot reach;
 - a hosted key would spend one free-tier quota per visitor.
 
-What a public URL *can* offer is the product with the waiting removed — the
-diff, the gaps, the draft, the rendered files, the approval gate — all real,
-none of it costing a model call. `GET /api/capabilities` says which mode an
-instance is in, so the UI hides what it cannot do rather than guessing from the
-hostname.
+What a public URL *can* offer is the product with the waiting removed — the diff,
+the gaps, the draft, the rendered files, the approval gate — all real, none of it
+costing a model call. `GET /api/capabilities` says which mode an instance is in,
+so the UI hides what it cannot do rather than guessing from the hostname.
 
 ---
 
 ## 1. The database
 
-**Neon** (neon.tech) — 3 GiB, no expiry, scales to zero. Create a project, copy
-the connection string, and change the scheme:
+**Neon** (neon.tech) — 3 GiB, no expiry, scales to zero, no card.
+
+Create the project in **AWS us-east-1**. Vercel Functions run in `iad1` by
+default, which is us-east-1; a Neon project in Frankfurt means every query pays
+an Atlantic crossing twice, and on a page that makes four of them that is the
+whole response time.
+
+Neon gives you two connection strings. **Take the pooled one** — the host has
+`-pooler` in it:
 
 ```
-postgres://…            ← what Neon gives you
-postgresql+psycopg://…  ← what SQLAlchemy 2 needs
+postgresql://user:pass@ep-thing-123-pooler.us-east-1.aws.neon.tech/neondb?sslmode=require
+                                  ^^^^^^^
 ```
 
-(`db/session.py` rewrites the bare `postgres://` form for you, but the explicit
-one is clearer in a dashboard.)
+The direct string works too, right up until traffic arrives. A Vercel Function
+scales by starting more instances, each with its own connection pool, and it is
+the database that runs out of connections first. The pooled endpoint is PgBouncer
+in front of Postgres and exists for exactly this shape of client.
+`app/db/session.py` bounds the pool per instance (5 + 5) and recycles at 300s so
+it drops a connection before PgBouncer does; the comment there explains why
+`prepare_threshold` is *not* set, which is the one piece of folklore you will be
+told to apply.
 
-Supabase's free 500 MB works too. Artifacts are stored as bytes in the database
-— a `.docx` plus a `.pdf` is roughly 50 KB per run, so 500 MB is about ten
-thousand applications.
+Then change the scheme, because SQLAlchemy 2 rejects the bare form:
+
+```
+postgresql://…            ← what Neon gives you
+postgresql+psycopg://…    ← what SQLAlchemy 2 needs
+```
+
+(`db/session.py` rewrites a `postgres://` URL for you, but the explicit one is
+clearer in a dashboard six months later.)
 
 ## 2. Secrets
 
@@ -57,8 +83,8 @@ thousand applications.
 python -m scripts.keys
 ```
 
-Three values, none of which has a default in source, each of which refuses at
-the point of use rather than falling back:
+Three values, none with a default in source, each refusing at the point of use
+rather than falling back to something insecure:
 
 | variable | signs / encrypts | if you change it |
 | --- | --- | --- |
@@ -66,110 +92,257 @@ the point of use rather than falling back:
 | `CONFIRM_TOKEN_SECRET` | approvals, and the send that follows | open previews must be reloaded. Harmless. |
 | `FERNET_KEY` | Gmail refresh tokens at rest | **every stored token becomes unreadable and every user must reconnect Gmail.** |
 
-## 3. The API, on Render
+## 3. Migrations, from your laptop
 
-`render.yaml` is in the repo root — connect the repo as a Blueprint and Render
-reads it. It sets `ENVIRONMENT=production` and `JOBTAILOR_READ_ONLY=true`, and
-asks for the `sync: false` values once.
+There is no start command on a serverless host, so nothing runs `alembic upgrade
+head` for you — and that is the better arrangement. A migration at deploy time
+means a schema change can fail a build, and a migration at import time means it
+races every other instance starting at the same moment.
 
-Set `CORS_ORIGINS` and `FRONTEND_URL` to your Vercel URL **before** the first
-sign-in attempt. A wildcard cannot work: browsers reject a credentialed
-response whose `Access-Control-Allow-Origin` is `*`, so `*` does not open a
-hole — it silently breaks sign-in, and every screen reports "not signed in"
-while the network tab shows 200s. `config.check` refuses it for that reason.
+Run it once, pointed at Neon, from the machine you are reading this on:
 
-What the free tier actually does:
-
-- 750 instance-hours a month — one service running continuously;
-- **spins down after 15 minutes idle**, and the next request waits 30–50
-  seconds. Survivable for a portfolio link, and the reason the UI says what it
-  is waiting for instead of showing a spinner;
-- the filesystem is ephemeral. Nothing here writes a file it expects to find
-  later — artifacts are bytes in Postgres, which is exactly why `io/render`
-  returns bytes rather than paths. v1 stored absolute paths, the host
-  restarted, and the rows pointed at files that no longer existed.
-
-**One worker, deliberately.** The rate limiter counts in-process, so two
-workers would mean two counters and an effective limit of double what is
-written down.
-
-**Vercel cannot host the API.** It runs serverless functions, not a process;
-FastAPI with a background thread that outlives a request has nowhere to live
-there, and neither does a run that takes minutes.
-
-## 4. The UI, on Vercel
-
-Import the repo, set the root directory to `web/`, and add one variable:
-
-```
-NEXT_PUBLIC_API_URL=https://jobtailor-api.onrender.com
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://…-pooler…/neondb?sslmode=require"
+python -m alembic upgrade head
+python -m alembic current          # should print the head revision
 ```
 
-`vercel.json` sets the security headers. There is no rewrite proxy, on purpose
-— see `web/next.config.mjs`: a rewrite would work in development and quietly
-become a proxy hop through Vercel's free plan in front of a service that can
-take minutes to answer.
+Repeat it after any deploy that includes a new file in `migrations/versions/`.
+`GET /` on the deployed API reports `database: ready` or names the missing
+tables, so you never have to guess whether you remembered.
 
-## 5. Google sign-in
+## 4. The API, on Vercel
+
+A **second Vercel project** from the same repository, with the root directory
+left at the repository root.
+
+Vercel's Python runtime looks for a `FastAPI` instance named `app` at `app.py`,
+`index.py`, `server.py`, `main.py`, `wsgi.py` or `asgi.py` — in the root, or
+inside `src/` or `app/`. Ours is at `app/api/main.py`, one level deeper than any
+of those, so `pyproject.toml` says where it is:
+
+```toml
+[tool.vercel]
+entrypoint = "app.api.main:app"
+```
+
+`vercel.json` in the root caps the function at 30 seconds. Hobby's default and
+maximum are both 300, and 300 seconds of a stuck request is 300 seconds of
+provisioned memory you are waiting on; a read-only instance reads a row and
+returns bytes, so anything past 30 is stuck rather than slow.
+`tests/test_deploy.py` checks that the entrypoint still imports and that the
+`vercel.json` key still matches the file it resolves to — a rename otherwise has
+its first symptom on a deployed URL.
+
+Environment variables, all in **Production** (and Preview, if you want preview
+deployments to work at all):
+
+| variable | value |
+| --- | --- |
+| `ENVIRONMENT` | `production` |
+| `JOBTAILOR_READ_ONLY` | `true` |
+| `DEMO_USER_EMAIL` | `demo@jobtailor.example` |
+| `DATABASE_URL` | the pooled Neon string, `postgresql+psycopg://…` |
+| `JWT_SECRET` | from `scripts.keys` |
+| `FERNET_KEY` | from `scripts.keys` |
+| `CONFIRM_TOKEN_SECRET` | from `scripts.keys` |
+| `MAIL_PROVIDER` | `console` |
+| `CORS_ORIGINS` | the UI's origin, e.g. `https://jobtailor.vercel.app` |
+| `FRONTEND_URL` | the same |
+| `GOOGLE_CLIENT_ID` | see §6 |
+| `GOOGLE_CLIENT_SECRET` | see §6 |
+| `GOOGLE_REDIRECT_URI` | `https://<the UI origin>/api/auth/google/callback` |
+
+`DEV_USER_EMAIL` is deliberately absent. It is an authentication bypass — every
+unauthenticated request becomes that user — and it is *ignored* when
+`ENVIRONMENT=production`, and `config.check` complains if it is set there. Three
+layers, because one of them will be the one you forget.
+
+`DEMO_USER_EMAIL` gives an anonymous visitor the seeded demo account, so the
+public URL shows the product instead of an empty list. It resolves **only** on a
+read-only instance, and a read-only instance refuses every unsafe HTTP method, so
+the worst a visitor can do with it is read. On a writable instance it does
+nothing at all — which is what stops it being `DEV_USER_EMAIL` in a disguise.
+
+**One function, and the rate limiter knows it.** `api/limits.py` counts in
+process. Vercel scales by adding instances, so each instance enforces its own
+window and the effective limit is the written one times the number of instances.
+On a read-only deployment the limiter is belt-and-braces (every mutating method
+is already 403) and this does not matter. If this instance is ever made writable,
+the counter has to move into the database first.
+
+## 5. The UI, on Vercel
+
+The **first** project: import the repo, set the root directory to `web/`.
+
+| variable | value |
+| --- | --- |
+| `NEXT_PUBLIC_API_URL` | `/` |
+| `API_ORIGIN` | the API project's URL, e.g. `https://jobtailor-api.vercel.app` |
+
+`NEXT_PUBLIC_API_URL=/` means "this origin": `lib/api.ts` normalises it to an
+empty prefix and requests `/api/…` relative. `API_ORIGIN` is read at build time
+by `next.config.mjs` to write the rewrite, and is never shipped to the browser.
+
+`web/vercel.json` sets the security headers.
+
+### The order that avoids an hour of confusion
+
+Each project needs the other's URL, so the first deploy of each is wrong and
+that is expected:
+
+1. Deploy the UI. Note its URL.
+2. Deploy the API. Note its URL.
+3. Set `API_ORIGIN` on the UI; set `CORS_ORIGINS`, `FRONTEND_URL` and
+   `GOOGLE_REDIRECT_URI` on the API.
+4. Redeploy both. A Vercel environment variable is read at build time, so saving
+   it is not enough — nothing changes until a new build.
+
+### One origin, and why
+
+`web/next.config.mjs` used to argue *against* a rewrite, and the argument was
+wrong in a way worth keeping written down.
+
+CORS and `SameSite` answer different questions. CORS decides whether a response
+may be *read* by a page from another origin, and `allow_credentials` is the
+server saying "I will accept a cookie". `SameSite` decides whether the browser
+*attaches* the cookie at all. The session cookie is `SameSite=Lax`, and Lax means:
+send this on a top-level navigation, never on a cross-site `fetch`.
+
+`jobtailor.vercel.app` and `jobtailor-api.vercel.app` look like one site and are
+not — `vercel.app` is on the Public Suffix List, so they are separate registrable
+domains and every `fetch` between them is cross-site. Sign-in would have
+completed, the cookie would have been stored, and every request after it would
+have answered 401 with the cookie sitting in the jar unsent. Nothing local would
+have caught it: `localhost:3000` and `localhost:8000` differ only by port, and
+`SameSite` ignores ports.
+
+`SameSite=None; Secure` is the usual answer and is not one here — that is a
+third-party cookie, which Safari's ITP and Firefox's Total Cookie Protection block
+outright. It turns "broken" into "broken in some browsers".
+
+So the browser is given one origin, the UI proxies `/api/*`, and every cookie is
+first-party — including the one Google's callback sets, which is why
+`GOOGLE_REDIRECT_URI` names the **UI** host. `Set-Cookie` is attributed to the
+origin the browser asked, not the one that answered behind the proxy.
+
+The old objection to a rewrite — "a proxy hop through Vercel on a free plan, in
+front of a service that can take eight minutes to answer" — expired when the API
+moved here. The service that takes eight minutes is the one with the model, and
+it is never deployed.
+
+## 6. Google sign-in
 
 In the Google Cloud console, add the **production** redirect URI to the same
 OAuth client, character for character:
 
 ```
-https://jobtailor-api.onrender.com/api/auth/google/callback
+https://jobtailor.vercel.app/api/auth/google/callback
 ```
 
-A trailing slash is a `redirect_uri_mismatch`.
+The UI host, not the API host — see above. A trailing slash is a
+`redirect_uri_mismatch`.
 
 While the app is in **Testing**, Google expires refresh tokens after **seven
-days**, so "connect Gmail" has to be repeated weekly. That is Google's rule,
-not a defect here — but it will confuse anyone you demo this to, so say it.
+days**, so "connect Gmail" has to be repeated weekly. That is Google's rule, not
+a defect here — but it will confuse anyone you demo this to, so say it first.
 
 `gmail.send` is Google's *sensitive* tier and needs a review to publish. Every
 other Gmail scope is *restricted* and needs a CASA assessment — roughly six
 weeks, renewed annually. **Do not add a second Gmail scope** to make something
-work; see `app/io/google.py`.
+work; `app/io/google.py` has the full reasoning.
 
-## 6. Seeding something to look at
+On a read-only instance signing in is close to pointless: it swaps the seeded
+demo account for your own empty one. It is left mounted because a UI that has to
+discover which endpoints exist is a UI that guesses.
+
+## 7. Seeding something to look at
 
 A read-only instance with an empty database shows empty lists. Point the seeder
-at the production URL once:
+at Neon once, from your laptop:
 
-```bash
-DATABASE_URL="postgresql+psycopg://…" python -m scripts.seed
-DATABASE_URL="postgresql+psycopg://…" python -m scripts.ui_demo
+```powershell
+$env:DATABASE_URL = "postgresql+psycopg://…-pooler…/neondb?sslmode=require"
+python -m scripts.demo_seed
 ```
 
-Neither spends a model call.
+It spends no model call, and the run it writes is a **real** one: a scripted
+client supplies the model's four answers, and the evidence matching, the
+validation, the application, the diff, the ATS pass and the render are all
+genuinely computed. So the refusal visible on the gate screen is the guarantee
+working, not a mock-up of it — the writer really does propose "cut processing time
+by 35%", that number really is absent from the resume, and S5 really does refuse
+it.
 
-## 7. Running the full app locally
+**Use `demo_seed` and not `scripts.seed` or `scripts.ui_demo` for anything
+public.** Those two import from your local `runs\` folder, which holds your real
+CV: name, address, phone number, employment history. `demo_seed` invents a
+candidate. Nobody should have to choose between showing their work and publishing
+their personal data.
+
+## 8. Running the full app locally
 
 The half that can actually tailor:
 
-```bash
+```powershell
 ollama serve                       # OLLAMA_CONTEXT_LENGTH=8192, see .env.example
 python -m alembic upgrade head
 $env:DEV_USER_EMAIL = "you@example.com"     # PowerShell. `set` does not work.
 python -m uvicorn app.api.main:app --reload --port 8000
 
-cd web && npm run dev
+cd web; npm run dev
 ```
 
-`DEV_USER_EMAIL` is an authentication bypass — every unauthenticated request
-becomes that user. It is what makes local work possible and it must never
-survive a deploy, so it is **ignored when `ENVIRONMENT=production`** and
-`config.check` complains if it is set there. It is deliberately absent from
-`render.yaml`.
+With `API_ORIGIN` and `NEXT_PUBLIC_API_URL` unset — which is what a fresh
+checkout does — the UI talks to `http://localhost:8000` directly, as it always
+has. Set `API_ORIGIN=http://localhost:8000` and `NEXT_PUBLIC_API_URL=/` in
+`web/.env.local` if you would rather develop through the same proxy the
+deployment uses.
 
 ---
+
+## Limits that will actually bite
+
+| limit | number | what it means here |
+| --- | --- | --- |
+| function bundle | 500 MB uncompressed (Python) | ours is around 150 MB installed. `pymupdf` alone is 120 MB and a read-only instance never opens a PDF, so there is room to trim if that ever changes. |
+| request/response body | 4.5 MB | the resume upload cap is 10 MB. Read-only refuses uploads anyway, but a **writable** Vercel deployment could not accept a large resume — that is a reason this design keeps uploads on the laptop, not an oversight. |
+| duration | 300s on Hobby, capped to 30 here | fine for reads. Not fine for a run, which is the other reason runs stay local. |
+| region | one, `iad1` by default | match the Neon region to it. |
+| Hobby plan | non-commercial use only | fine for a portfolio; not fine the day this has customers. |
+
+## Why not Render
+
+`render.yaml` used to live here, and the Blueprint flow asks for a credit card
+before it will deploy a service the config already pins to `plan: free` —
+*"Please enter your payment information to select an instance type with higher
+limits"*. Render's own free-tier documentation never mentions a card requirement,
+and there are open, unanswered threads on their forum about exactly this.
+
+Moving to Vercel was better on the merits anyway, once the reasoning behind
+"Vercel cannot host the API" was checked instead of repeated. That claim rested
+on a run taking minutes — but the public instance is read-only and never starts a
+run. It reads rows from Postgres and returns bytes, which is what a function is
+good at. Cold start goes from 30–50 seconds to about one, both halves live on one
+platform, there is no 15-minute spin-down, and the blueprint config that nobody
+could deploy is gone rather than left to rot.
 
 ## Before you make the URL public
 
 - [ ] `ENVIRONMENT=production` is set (it turns on `Secure` cookies and the
       `DEV_USER_EMAIL` refusal)
-- [ ] `CORS_ORIGINS` names the Vercel origin, not `*`
+- [ ] `DATABASE_URL` uses the **`-pooler`** Neon host
+- [ ] `alembic current` against Neon prints the head revision
+- [ ] `CORS_ORIGINS` names the UI origin, not `*` (`config.check` refuses `*`,
+      because a browser will not send a cookie to a wildcard origin and sign-in
+      would break silently while the network tab showed 200s)
+- [ ] `API_ORIGIN` is set on the UI project **and** it has been rebuilt since
+- [ ] `GOOGLE_REDIRECT_URI` names the UI host, ends in
+      `/api/auth/google/callback`, and matches the OAuth client exactly
 - [ ] `MAIL_PROVIDER=console` unless you have verified the OAuth client and
       genuinely mean to send
 - [ ] `GET /` reports `database: ready` and `google_sign_in: ready`
 - [ ] `GET /api/capabilities` reports `read_only: true`
+- [ ] a mutating request is refused — `curl -X POST https://<ui>/api/runs`
+      answers 403
 - [ ] the three secrets came from `scripts.keys`, not from `.env.example`

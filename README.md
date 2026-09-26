@@ -137,11 +137,16 @@ Ollama silently truncates a prompt longer than its context window.
 
 ## Deploying
 
-`DEPLOY.md` has the full runbook. The short version: the UI goes on Vercel, the
-API on Render, the database on Neon — all free — and the public instance serves
-runs that already happened rather than pretending it can start new ones. A run
-takes minutes, no HTTP request survives that, and the model that makes it cheap
-is on a laptop the internet cannot reach.
+`DEPLOY.md` has the full runbook. The short version: two Vercel projects — the
+UI, and the API as a single Python function — with the database on Neon, all
+free, and the public instance serves runs that already happened rather than
+pretending it can start new ones. A run takes minutes, no HTTP request survives
+that, and the model that makes it cheap is on a laptop the internet cannot reach.
+
+The browser only ever sees the UI's origin; `/api/*` is rewritten to the API. That
+is not tidiness — a `SameSite=Lax` cookie is never attached to a cross-site
+`fetch`, and `vercel.app` is a public suffix, so two Vercel subdomains are two
+sites. `web/next.config.mjs` has the full story.
 
 ## Layering
 

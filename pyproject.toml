@@ -1,3 +1,21 @@
+# ── Vercel ───────────────────────────────────────────────────────────────────
+#
+# Vercel's Python runtime finds a `FastAPI` instance named `app` by convention,
+# at `app.py`, `index.py`, `server.py`, `main.py`, `wsgi.py` or `asgi.py` — in
+# the repository root, or inside `src/` or `app/`. Ours is at `app/api/main.py`,
+# which is one directory deeper than any of those, so the convention misses it
+# and this line is what points at it. `module.path:name` → `./app/api/main.py`.
+#
+# There is no `[project]` table on purpose. Adding one makes Vercel install from
+# `pyproject.toml` instead of `requirements.txt`, and the pinned set lives in
+# requirements.txt (STACK.md, D-17: one dependency list, no profile switch).
+#
+# `tests/test_deploy.py` imports this value and checks that it resolves to a
+# real FastAPI instance, because a rename here fails at the first request of a
+# deployment and nowhere earlier.
+[tool.vercel]
+entrypoint = "app.api.main:app"
+
 [tool.pytest.ini_options]
 # `pythonpath` puts the project root on sys.path so `import app` works with a
 # bare `pytest`. Without it only `python -m pytest` works, because that form

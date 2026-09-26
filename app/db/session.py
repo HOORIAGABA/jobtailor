@@ -63,15 +63,54 @@ def build_engine(url: str | None = None, *, echo: bool = False) -> Engine:
     url = url or database_url()
     is_sqlite = url.startswith("sqlite")
 
+    # Postgres-only pool settings. SQLite gets none of them: `create_engine`
+    # gives a file-backed SQLite a SingletonThreadPool/NullPool where `pool_size`
+    # is either meaningless or a TypeError, so passing them unconditionally
+    # breaks every local run and every test.
+    pooled: dict[str, object] = {}
+    if not is_sqlite:
+        # Pre-ping because a free-tier Postgres drops idle connections and a
+        # stale one surfaces as a mid-run crash rather than as a reconnect.
+        pooled["pool_pre_ping"] = True
+
+        # ── Why these numbers, on a serverless host ──────────────────────────
+        #
+        # The hosted API is a Vercel Function. Under Fluid compute one instance
+        # is a real ASGI process serving many concurrent requests, so a pool is
+        # right — NullPool would open and close a Postgres connection per
+        # request, which on a database that scales to zero is the slowest thing
+        # in the response. But instances multiply under load, and the pool is
+        # per instance: the connection count at the database is
+        # (pool_size + max_overflow) × instances, and it is the database that
+        # runs out first. 5 + 5 keeps ten instances inside Neon's pooled
+        # endpoint comfortably.
+        #
+        # `pool_recycle` is the one that bites. Neon's pooled endpoint is
+        # PgBouncer and it closes an idle client connection after a few minutes;
+        # a function instance that has been quiet holds a handle to a socket
+        # that is already gone. `pool_pre_ping` catches that on the next
+        # checkout, but it pays a round trip to find out, and it only helps if
+        # the server actually sent a FIN we noticed. Recycling at 300s means we
+        # drop the connection before the proxy does.
+        pooled["pool_size"] = 5
+        pooled["max_overflow"] = 5
+        pooled["pool_recycle"] = 300
+
+        # Not set, and worth writing down because the internet will tell you to:
+        # psycopg 3 prepares a statement automatically after it has seen it five
+        # times, and under PgBouncer's transaction pooling that used to fail with
+        # `prepared statement "_pg3_0" already exists` — hence the folklore fix
+        # `prepare_threshold=None`. PgBouncer has supported protocol-level
+        # prepared statements since 1.21 and Neon's pooler since 1.22 (Feb 2024),
+        # so on Neon the folklore fix now only costs performance. If a *different*
+        # pooler ever sits in front of this, that is the knob.
+
     engine = create_engine(
         url,
         echo=echo,
         future=True,
-        # The pipeline blocks for minutes on a model call while holding nothing,
-        # so a small pool is right; pre-ping because a free-tier Postgres drops
-        # idle connections and a stale one surfaces as a mid-run crash.
-        pool_pre_ping=not is_sqlite,
         connect_args={"check_same_thread": False} if is_sqlite else {},
+        **pooled,                                          # type: ignore[arg-type]
     )
 
     if is_sqlite:
