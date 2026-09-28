@@ -442,14 +442,17 @@ def test_a_read_only_instance_refuses_every_write(tmp_path, monkeypatch):
         ("POST", "/api/runs"),
         ("POST", "/api/runs/whatever/decision"),
         ("POST", "/api/runs/whatever/send"),
-        ("DELETE", "/api/auth/google"),
     ]
     for method, path in writes:
         response = client.request(method, path, json={})
         assert response.status_code == 403, f"{method} {path} was allowed"
         assert "cannot change anything" in response.json()["detail"]
 
-    # Signing out is the one exception: it clears a cookie the browser already
-    # has, and a demo you cannot sign out of is a demo that has trapped you.
+    # Two exceptions, both a person withdrawing something. Signing out clears
+    # a cookie the browser already has, and a demo you cannot sign out of is
+    # a demo that has trapped you. Disconnecting Gmail revokes a grant, and
+    # this used to be refused while the GET callback that STORED the grant
+    # was not — see tests/test_auth.py, the read-only section.
     assert client.post("/api/auth/logout").status_code == 200
+    assert client.delete("/api/auth/google").status_code == 200
     db_session.reset()

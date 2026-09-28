@@ -30,7 +30,7 @@ from app.domain.models import ResumeDoc
 from app.io.cache import Cache, NullCache
 from app.io.dblog import DbRunLog
 from app.io.llm import LLMClient
-from app.pipeline.run import tailor
+from app.pipeline.run import RunState, account, tailor
 
 logger = logging.getLogger(__name__)
 
@@ -82,34 +82,55 @@ def execute(factory: sessionmaker[Session], run_id: str,
     Never raises. A failed run is a run in `failed` with the reason on it —
     raising here would lose that, because nobody is awaiting this call.
     """
-    with factory() as session:
-        run = session.get(Run, run_id)
-        if run is None:
-            logger.error("No run %s to execute", run_id)
-            return
-        resume = session.get(Resume, run.resume_id)
-        doc = ResumeDoc.model_validate(resume.doc_json)
-        jd_text = run.jd_text
-        confirmed = _confirmed_capabilities(session, run.user_id)
-        run.move_to("tailoring")
-        session.commit()
-
     log = DbRunLog(run_id, factory)
+    try:
+        with factory() as session:
+            run = session.get(Run, run_id)
+            if run is None:
+                logger.error("No run %s to execute", run_id)
+                return
+            resume = session.get(Resume, run.resume_id)
+            doc = ResumeDoc.model_validate(resume.doc_json)
+            jd_text = run.jd_text
+            confirmed = _confirmed_capabilities(session, run.user_id)
+            run.move_to("tailoring")
+            session.commit()
+    except Exception as exc:                              # noqa: BLE001
+        # Inside the try for the same reason the stages are: "never raises"
+        # has to include the setup. A resume row whose `doc_json` no longer
+        # validates against the current `ResumeDoc` — a schema change since it
+        # was confirmed — raised here, past the handlers below, and left the
+        # run in `created` forever with no error on it.
+        logger.exception("Run %s could not start", run_id)
+        _fail(factory, run_id, exc, log)
+        return
+
+    # The state is created here rather than inside `tailor()` so that a run
+    # which fails halfway still has one: the accounting below records what
+    # was spent and which proofs can be evaluated on the stages that finished.
+    state = RunState()
     try:
         tailor(
             doc, jd_text, smart_client or client,
-            log=log, cache=cache or NullCache(),
+            log=log, state=state, cache=cache or NullCache(),
             confirmed_capabilities=confirmed,
             semantic_hints=semantic_hints,
             write_outreach=write_outreach,
         )
     except JobTailorError as exc:
+        account(log, state, client, smart_client)
         _fail(factory, run_id, exc, log)
         return
     except Exception as exc:                              # noqa: BLE001
         logger.exception("Run %s failed unexpectedly", run_id)
+        account(log, state, client, smart_client)
         _fail(factory, run_id, exc, log)
         return
+
+    # Calls, tokens, the merged call log and the proof block. `run()` did this
+    # and this path did not, so every run started from the UI reported zero
+    # model calls and an empty proof — see docs/DECISIONS.md, B12.
+    account(log, state, client, smart_client)
 
     with factory() as session:
         run = session.get(Run, run_id)
@@ -130,7 +151,12 @@ def _fail(factory, run_id: str, exc: Exception, log: DbRunLog) -> None:
         run = session.get(Run, run_id)
         if run is not None:
             run.error = f"{type(exc).__name__}: {exc}"
-            run.status = "failed"
+            # Through the state machine, not `run.status = "failed"`. The
+            # assignment was the one place in the codebase that set a status
+            # without the transition table — which is how a table stops being
+            # the rule. `tailoring -> failed` is legal, so this is not a
+            # behaviour change; it is the guarantee that it stays legal.
+            run.move_to("failed")
             session.commit()
 
 

@@ -20,6 +20,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+from concurrent.futures import Future, ThreadPoolExecutor
 from typing import Any, AsyncIterator
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -114,13 +115,47 @@ def start(payload: RunIn, request: Request,
     if settings.has_smart_model:
         smart = BudgetedClient(build_client(settings, role="smart"), budget)
 
-    # `to_thread` because the pipeline is synchronous and spends most of its
-    # time blocked on a model. Inline, it would stop the server answering the
-    # very requests the client uses to watch it.
-    asyncio.get_running_loop().run_in_executor(
-        None, _execute, run_id, client, smart, payload)
+    # ★ A thread, and NOT `asyncio.get_running_loop()`.
+    #
+    # This handler is `def`, not `async def`, so FastAPI runs it in an anyio
+    # worker thread — where there is no running event loop and
+    # `get_running_loop()` raises `RuntimeError: no running event loop`. The
+    # previous version called it here, so **every** `POST /api/runs` answered
+    # 500, after `session.commit()` had already written the row: an orphan run
+    # stuck in `created`, a spent rate-limit token, and a UI that could never
+    # start anything.
+    #
+    # The suite missed it because every other test drives `pipeline.run.tailor`
+    # or `pipeline.runs.execute` directly. Nothing exercised the HTTP path that
+    # is the only way a person reaches this. `tests/test_run_api.py` now does.
+    #
+    # An explicit pool rather than the default executor: the default is shared
+    # with every `run_in_executor` in the process and is sized for short work,
+    # and a run blocks for minutes.
+    future = _RUNNERS.submit(_execute, run_id, client, smart, payload)
+    future.add_done_callback(_complain_if_it_died)
 
     return {"run_id": run_id, "events": f"/api/runs/{run_id}/events"}
+
+
+# Two, because a person runs one at a time and the second is headroom for a
+# retry arriving while the first is still going. Unbounded would let a loop of
+# requests start a model call each.
+_RUNNERS = ThreadPoolExecutor(max_workers=2, thread_name_prefix="jobtailor-run")
+
+
+def _complain_if_it_died(future: Future) -> None:
+    """Surface an exception the pool would otherwise swallow.
+
+    A `Future` nobody inspects keeps its exception to itself for ever.
+    `pipeline.runs.execute` is written not to raise — it moves the run to
+    `failed` with the reason on it — but "written not to" is not "cannot", and a
+    run wedged in `created` with an empty error field is the hardest kind of
+    failure to diagnose from the outside.
+    """
+    exc = future.exception()
+    if exc is not None:                                    # pragma: no cover
+        logger.exception("run worker died", exc_info=exc)
 
 
 def _execute(run_id: str, client, smart, payload: RunIn) -> None:

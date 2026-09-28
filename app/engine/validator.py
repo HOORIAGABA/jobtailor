@@ -54,7 +54,27 @@ def grounding_corpus(doc: ResumeDoc, confirmed: Iterable[str] = ()) -> set[str]:
 
 # ── extraction helpers ────────────────────────────────────────────────
 
-_NUMBER = re.compile(r"\d+(?:[.,]\d+)?")
+# ★ A number is its digits AND its unit, and this regex is why.
+#
+# The first version was `\d+(?:[.,]\d+)?` with commas stripped, which made a
+# number a bare digit string. Two fabrications walked straight through it:
+#
+#   "Reduced latency by 40 ms"  ->  "Reduced latency by 40%"     accepted
+#   "900 tickets, 12,000 users" ->  "12,000,900 sessions"        accepted
+#
+# The first because the unit was discarded, so `40` matched `40`. The second
+# because `(?:[.,]\d+)?` allows only ONE group, so `12,000` tokenised as
+# `{"12", "000"}` and a 1,000x inflation was assembled from parts "present in
+# the original".
+#
+# So: grouped thousands are one literal, and a SHORT trailing unit (ms, km, MB,
+# k, %) is carried with the value. The unit is capped at four letters with a
+# negative lookahead so `900 tickets` stays `900` — attaching an ordinary noun
+# would reject every honest rewording of the words around a number.
+_NUMBER = re.compile(
+    r"(?P<value>\d{1,3}(?:,\d{3})+(?:\.\d+)?|\d+(?:\.\d+)?)"
+    r"(?P<unit>\s*%|\s*[A-Za-z]{1,4}(?![A-Za-z]))?"
+)
 
 # Tokenisation lives in engine.text so every comparison in the system uses the
 # same notion of a word. Three disagreeing tokenisers is what the previous
@@ -79,8 +99,17 @@ _NOT_ENTITIES = frozenset({
 
 
 def numbers(text: str) -> set[str]:
-    """Numeric literals, comma-normalized so `1,200` and `1200` compare equal."""
-    return {m.group().replace(",", "") for m in _NUMBER.finditer(text or "")}
+    """Numeric literals with their units, normalised for comparison.
+
+    `1,200` and `1200` compare equal; `40 ms`, `40%` and `40` do not. The unit
+    is folded to lowercase and its spacing removed, so `40 MB` == `40mb`.
+    """
+    found: set[str] = set()
+    for match in _NUMBER.finditer(text or ""):
+        value = match.group("value").replace(",", "")
+        unit = (match.group("unit") or "").strip().lower()
+        found.add(value + unit)
+    return found
 
 
 # Words that open a sentence and name nothing. Only consulted for a token that
@@ -207,10 +236,27 @@ def escalates_seniority(origin: str, rewritten: str) -> str | None:
     promotion the resume does not support.
     """
     o, r = set(content_tokens(origin)), set(content_tokens(rewritten))
-    if (o & WEAK_VERBS) and (r & OWNERSHIP_VERBS) and not (o & OWNERSHIP_VERBS):
+
+    # ★ A new ownership verb is the violation, whether or not the origin had a
+    # weak one.
+    #
+    # The first version required `o & WEAK_VERBS` — the origin had to already
+    # say "helped" or "assisted" for the check to fire at all. So a neutral
+    # origin was a free promotion:
+    #
+    #   "Fixed bugs in the payments service"
+    #     -> "Directed the payments service rebuild"          accepted
+    #
+    # No new number and both verbs are in `_NOT_ENTITIES`, so Class A and
+    # Class C saw nothing either. The docstring above says this function
+    # rejects a rewrite that "inflates the candidate's role"; it now does.
+    claimed = (r & OWNERSHIP_VERBS) - (o & OWNERSHIP_VERBS)
+    if claimed:
+        weak = sorted(o & WEAK_VERBS)
         return (
-            f"origin uses {sorted(o & WEAK_VERBS)}; rewrite claims "
-            f"{sorted(r & OWNERSHIP_VERBS)}"
+            f"origin uses {weak}; rewrite claims {sorted(claimed)}"
+            if weak else
+            f"rewrite claims {sorted(claimed)}, which the original does not"
         )
     ol, rl = (origin or "").lower(), (rewritten or "").lower()
     for marker in SCOPE_MARKERS:
@@ -222,6 +268,10 @@ def escalates_seniority(origin: str, rewritten: str) -> str | None:
 # ── Class B: keyword stuffing ─────────────────────────────────────────
 
 _STUFF_SIMILARITY = 0.85
+# Three, from the shape of real bullets rather than from theory: a bullet that
+# names four or more distinct tools has stopped describing work and started
+# listing inventory. Raising it weakens the count rule below, which is the only
+# density rule that applies when the model declares no target terms.
 _MAX_TERMS_PER_BULLET = 3
 _MAX_TERM_DENSITY = 0.25
 
@@ -362,12 +412,123 @@ def _check_rewrite(op: RewriteBullet, doc: ResumeDoc, corpus: set[str]) -> Rejec
     # Class B — framing may not inflate, and may not be decoration.
     if (reason := escalates_seniority(origin.text, op.text)):
         return _reject(op, "seniority_escalation", reason)
-    if op.target_terms:
-        if is_keyword_stuffing(origin.text, op.text, op.target_terms):
+    # ★ These two run ALWAYS. They used to be behind `if op.target_terms:`.
+    #
+    # `target_terms` comes from the planner — the model. So the model decided
+    # whether its own rewrite got checked for keyword stuffing, and the planner
+    # prompt tells it that listing terms is what triggers rejection. Declaring
+    # nothing was both permitted and incentivised.
+    #
+    # This is verbatim the anti-pattern `domain/ops.py` records as already
+    # removed once: "An earlier draft had the writer declare `numbers_used` /
+    # `terms_used`, which the validator then trusted. A model that
+    # under-declares evades the fabrication guard entirely." It survived here.
+    #
+    # The vocabulary now comes from the code when the model supplies none: what
+    # the rewrite names that the original did not.
+    declared = list(op.target_terms)
+    terms = declared or sorted(entities(op.text) - entities(origin.text))
+    if terms:
+        if is_keyword_stuffing(origin.text, op.text, terms):
             return _reject(op, "keyword_stuffing",
                            "only keywords changed; the bullet says the same thing")
-        if (reason := term_density_violation(op.text, op.target_terms)):
-            return _reject(op, "term_density", reason)
+
+        # Density splits, and the split is not a compromise — the two halves of
+        # `term_density_violation` measure different things.
+        #
+        # The RATIO half is calibrated for terms the planner deliberately
+        # targeted, where a high proportion means padding. Applied to every
+        # newly-named entity it fires on honest writing: "Built reporting
+        # services in .NET and C++" is two names in seven words, 0.29, over the
+        # 0.25 bound — and that rewrite is entirely legitimate. (It is a
+        # regression test: `test_dotted_tool_names_match_the_corpus`.)
+        #
+        # The COUNT half is robust either way. Four or more new names in one
+        # bullet is cramming whatever the model declared, so that is the rule
+        # that applies when the model declared nothing.
+        if declared:
+            if (reason := term_density_violation(op.text, declared)):
+                return _reject(op, "term_density", reason)
+        elif len(terms) > _MAX_TERMS_PER_BULLET:
+            return _reject(
+                op, "term_density",
+                f"{len(terms)} names new to this bullet "
+                f"(max {_MAX_TERMS_PER_BULLET})")
+    return None
+
+
+def _document_text(doc: ResumeDoc) -> str:
+    """Everything the resume says, as one string.
+
+    The grounding corpus for a summary. A summary legitimately draws on the
+    whole document rather than on one bullet, so restricting it to the cited
+    lines would reject honest summaries; requiring every number and every named
+    thing to appear SOMEWHERE in the resume is the rule that is both true and
+    enforceable.
+    """
+    parts: list[str] = [doc.summary or ""]
+    for item in doc.all_items():
+        parts.extend(x for x in (item.title, item.org, item.dates) if x)
+        parts.extend(b.text for b in item.bullets)
+    parts.extend(doc.skill_inventory)
+    return " \n".join(p for p in parts if p)
+
+
+def _check_set_summary(op: SetSummary, doc: ResumeDoc, corpus: set[str]) -> Reject | None:
+    """★ The summary is checked like everything else. It was not checked at all.
+
+    This branch used to verify two things: that `cites` was non-empty, and that
+    the cited ids resolved. No Class A, no Class B, no Class C — on the ONE
+    operation where the model writes free prose, and into the block that sits
+    at the top of the page where a recruiter reads first.
+
+    What that accepted, verified against a resume containing none of it:
+
+        "Senior ML lead who grew revenue 400% at Google, managing a
+         team of 30 engineers using Kubernetes."
+
+    `fabrication_count` reported 0 and `apply_ops` wrote it to `doc.summary`.
+    It laundered further: `engine.message` seeds the email's legal-number set
+    from `numbers(doc.summary)`, so an invented figure in the summary became
+    quotable in the outreach email as well.
+
+    A test asserted the accepting behaviour, which is why nothing complained.
+    """
+    if not op.cites:
+        return _reject(op, "missing_citation",
+                       "a summary must cite the bullets backing its claims")
+    if (missing := [c for c in op.cites if not doc.has(c)]):
+        return _reject(op, "unknown_id", f"cites unknown ids {missing}")
+    if not (op.text or "").strip():
+        return _reject(op, "unknown_id", "summary has no text")
+
+    grounding = _document_text(doc)
+
+    # Class A — every number must already be somewhere on the resume.
+    invented = numbers(op.text) - numbers(grounding)
+    if invented:
+        return _reject(
+            op, "fabricated_number",
+            f"summary introduces {sorted(invented)}, which appears nowhere in "
+            f"the resume",
+            ask=True,
+        )
+
+    # Class C — every named capability must be on the resume or in the corpus.
+    unsupported = entities(op.text) - entities(grounding) - corpus
+    if unsupported:
+        return _reject(
+            op, "unsupported_entity",
+            f"summary names {sorted(unsupported)} which the resume does not "
+            f"support",
+            ask=True,
+        )
+
+    # Class B — a summary may frame, but it may not promote. The origin here is
+    # the whole document: if no bullet anywhere claims ownership, the summary
+    # may not either.
+    if (reason := escalates_seniority(grounding, op.text)):
+        return _reject(op, "seniority_escalation", reason)
     return None
 
 
@@ -503,11 +664,7 @@ def validate(
             problem = _check_set_skills(op, doc, corpus)
 
         elif isinstance(op, SetSummary):
-            if not op.cites:
-                problem = _reject(op, "missing_citation",
-                                  "a summary must cite the bullets backing its claims")
-            elif (missing := [c for c in op.cites if not doc.has(c)]):
-                problem = _reject(op, "unknown_id", f"cites unknown ids {missing}")
+            problem = _check_set_summary(op, doc, corpus)
 
         elif isinstance(op, DropBullet):
             item = doc.item(_safe_item_of(op.bullet_id))

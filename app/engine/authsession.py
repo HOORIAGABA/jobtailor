@@ -90,14 +90,15 @@ def read(secret: str, cookie: str, *, now: float | None = None) -> str:
         raise BadCookie("not a session cookie")
 
     _, user_id, expiry_text, mac = parts
-    try:
-        expires_at = int(expiry_text)
-    except ValueError as exc:
-        raise BadCookie("not a session cookie") from exc
+    if not (expiry_text.isascii() and expiry_text.isdigit()):
+        raise BadCookie("not a session cookie")
+    expires_at = int(expiry_text)
 
     expected = hmac.new(secret.encode(), _payload(user_id, expires_at),
                         hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, mac):
+    # Bytes, not str: `compare_digest` raises on a non-ASCII str, and a cookie
+    # is attacker-supplied. See `engine.confirm.matches`.
+    if not hmac.compare_digest(expected.encode(), mac.encode()):
         raise BadCookie("this session cookie was not signed by this server")
     if (now if now is not None else time.time()) >= expires_at:
         raise BadCookie("this session has expired")

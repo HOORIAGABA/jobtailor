@@ -4,13 +4,20 @@ Five steps in a fixed order, and the order is the design:
 
     1  refuse if `sent_at` is already set                     -> 409
     2  recompute the HMAC over the SUPPLIED recipient/subject/body
-    3  write the audit row  BEFORE  dispatching
+    3  claim the run with a conditional UPDATE, then write the audit row,
+       BEFORE dispatching
     4  dispatch
     5  record the provider id, status = sent  (terminal)
 
 **Step 1 is the idempotency guard.** A double-clicked button, a retried request
 and a resumed worker must all be unable to send twice, and the check is a column
 rather than a lock because a lock does not survive the process.
+
+**Step 3's claim is what makes step 1 hold under concurrency.** Step 1 is a
+read, and two requests can read the same row before either writes it. The
+claim is `UPDATE runs SET status='sending' WHERE id=? AND status='approved'`,
+which the database evaluates atomically, so exactly one request proceeds and
+the other is told the message is already on its way.
 
 **Step 2 is why `/send` takes the message as parameters.** Reading it from the
 row would mean the value that was approved and the value that is sent are only
@@ -37,11 +44,12 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 
+from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.db.models import Artifact, Message, Run, SendAudit, User
 from app.domain.errors import IllegalTransition, UserError
-from app.domain.status import may_send
+from app.domain.status import check_run_transition, may_send
 from app.engine.confirm import expires_at, issue, matches
 from app.io.mail.base import Attachment, OutgoingMessage, SendFailed, Sender
 
@@ -104,9 +112,18 @@ def send(session: Session, run: Run, user: User, sender: Sender, *,
         attachments=_attachments(session, run),
     )
 
-    # 3 — the audit row exists before the provider is touched.
+    # 3 — claim the run, then write the audit row, then touch the provider.
+    #
+    # ★ The claim is a conditional UPDATE, not an attribute assignment. Steps 1
+    # and 2 read the row; two requests that read it in the same instant — a
+    # double-click, a retry racing the original — both saw `approved` and
+    # `sent_at IS NULL`, both passed, and both dispatched. The state machine
+    # cannot stop that on its own: it checks the copy each request loaded,
+    # and both copies were legal. `WHERE status = 'approved'` makes the
+    # database decide, once: the second UPDATE matches zero rows, and that
+    # request is told so instead of sending a second email.
+    _claim(session, run, "sending")
     _audit(session, message, outgoing, "attempted")
-    run.move_to("sending")
     session.commit()
 
     # 4 — dispatch. Two kinds of failure, and they are not the same failure.
@@ -242,6 +259,34 @@ def _attachments(session: Session, run: Run) -> list[Attachment]:
         Attachment(filename=by_stage[stage].filename, data=by_stage[stage].blob)
         for stage in ATTACH_STAGES if stage in by_stage
     ]
+
+
+def _claim(session: Session, run: Run, target: str) -> None:
+    """Move the run to `target` only if nobody else has moved it first.
+
+    The transition table still decides whether the move is legal — that rule
+    lives in one place and this is not a second copy of it. What the UPDATE
+    adds is *atomicity*: the check and the write are one statement, so two
+    requests cannot both pass the check against the same stale row. On
+    Postgres the second UPDATE waits for the first to commit and then re-reads
+    the row; on SQLite the write lock serialises them. Either way exactly one
+    wins, and the loser's transaction is rolled back so its audit row, had it
+    been written first, would not survive either.
+    """
+    check_run_transition(run.status, target)
+    claimed = session.execute(
+        update(Run)
+        .where(Run.id == run.id, Run.status == run.status)
+        .values(status=target)
+        .execution_options(synchronize_session=False)
+    ).rowcount
+    if claimed != 1:
+        session.rollback()
+        raise AlreadySent(
+            "another request is already sending this message — wait for it "
+            "to finish rather than sending twice"
+        )
+    run.status = target
 
 
 def _audit(session: Session, message: Message, outgoing: OutgoingMessage,

@@ -344,6 +344,14 @@ class SendAudit(Base):
     process restart, which a module-level counter would not.
     """
     __tablename__ = "send_audit"
+    # Two rows cannot be the same "nth thing that happened" to a message. The
+    # counter is computed as `count + 1` in application code, and two writers
+    # racing on one message would both compute the same value; the constraint
+    # makes the second one fail loudly instead of leaving an audit trail with
+    # two 3rd entries and no way to say which came first.
+    __table_args__ = (
+        UniqueConstraint("message_id", "seq", name="uq_send_audit_seq"),
+    )
 
     id: Mapped[str] = mapped_column(String(32), primary_key=True, default=_id)
     message_id: Mapped[str] = mapped_column(ForeignKey("messages.id"), index=True)

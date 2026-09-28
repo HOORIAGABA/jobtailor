@@ -395,3 +395,237 @@ def test_the_posting_field_has_a_ceiling():
     RunIn(resume_id="r", job="x" * MAX_JOB_CHARS)
     with pytest.raises(Exception):
         RunIn(resume_id="r", job="x" * (MAX_JOB_CHARS + 1))
+
+
+# ══ starting a run over HTTP ══════════════════════════════════════════
+#
+# ★ Everything above starts a run by calling `pipeline.runs.create` or
+# `pipeline.runs.execute` directly. Nothing exercised `POST /api/runs`, which is
+# the only route a person has — and it answered 500 on every request, because
+# the handler is `def` (so FastAPI runs it in a worker thread) and it called
+# `asyncio.get_running_loop()`, which raises where there is no loop.
+#
+# The row was already committed by then, so each attempt also left an orphan run
+# in `created` and spent a rate-limit token. 985 tests, all green, and the
+# product's primary action was unreachable.
+
+def test_posting_a_run_answers_202_and_does_not_500(api: TestClient, monkeypatch):
+    """The regression test for the bug 985 other tests could not see."""
+    from app.api import runs as route
+
+    started: list[str] = []
+    # The pipeline itself is not under test here: no model is configured in the
+    # suite, and this asserts the handler's contract, not the tailoring.
+    monkeypatch.setattr(route, "check", lambda _settings: [])
+    monkeypatch.setattr(route, "build_client", lambda *a, **k: object())
+    monkeypatch.setattr(route, "_execute",
+                        lambda run_id, *a, **k: started.append(run_id))
+
+    with session_scope() as s:
+        resume = s.query(models.Resume).one()
+        resume.status = "confirmed"
+        resume_id = resume.id
+
+    response = api.post("/api/runs",
+                        json={"resume_id": resume_id, "job": "x" * 200})
+
+    assert response.status_code == 202, response.text
+    body = response.json()
+
+    # The field is `run_id`, and the frontend read `id` — so a successful start
+    # navigated to `/runs/undefined`. Asserted here so the contract is pinned on
+    # both sides.
+    assert "run_id" in body and body["run_id"]
+    assert body["events"] == f"/api/runs/{body['run_id']}/events"
+
+
+def test_a_started_run_reaches_the_worker(api: TestClient, monkeypatch):
+    """The handler must actually hand the work off, not merely answer 202.
+
+    A 202 with nothing behind it is the same failure wearing a success code.
+    """
+    from concurrent.futures import Future
+
+    from app.api import runs as route
+
+    handed: list[tuple] = []
+
+    def fake_submit(fn, *args):
+        handed.append(args)
+        done: Future = Future()
+        done.set_result(None)
+        return done
+
+    monkeypatch.setattr(route, "check", lambda _settings: [])
+    monkeypatch.setattr(route, "build_client", lambda *a, **k: object())
+    monkeypatch.setattr(route._RUNNERS, "submit", fake_submit)
+
+    with session_scope() as s:
+        resume = s.query(models.Resume).one()
+        resume.status = "confirmed"
+        resume_id = resume.id
+
+    response = api.post("/api/runs",
+                        json={"resume_id": resume_id, "job": "y" * 200})
+
+    assert response.status_code == 202
+    assert len(handed) == 1
+    assert handed[0][0] == response.json()["run_id"]
+
+
+def test_put_is_allowed_by_cors(api: TestClient):
+    """`PUT /api/resumes/{id}/draft` is the edit loop for a corrected parse.
+
+    It was missing from `allow_methods`, so the preflight answered "Disallowed
+    CORS method" and saving a correction failed on every cross-origin
+    deployment — including the documented development setup, UI on :3000 and
+    API on :8000.
+    """
+    preflight = api.options(
+        "/api/resumes/abc/draft",
+        headers={"Origin": "http://localhost:3000",
+                 "Access-Control-Request-Method": "PUT"},
+    )
+    assert preflight.status_code == 200, preflight.text
+
+
+# ── the product path persists the verdict ────────────────────────────
+#
+# `validation` was logged by `tailor()` and stored by nothing: `DbRunLog` had
+# no column for it, so it became a checkpoint and `accepted_json` /
+# `rejected_json` were only ever written by the seed scripts. The accounting
+# (`llm_calls`, `tokens`, `proof_json`) lived in `run()`, which the product
+# path does not call. Result: every run started from the UI reported
+# `accepted: 0, rejected: 0`, no model calls and an empty proof block — on a
+# product whose whole claim is the refusal list.
+
+def _execute_the_demo(api: TestClient) -> str:
+    """Run the demo case through `pipeline.runs.execute`, the way the API
+    worker does, and return the run id."""
+    from datetime import datetime, timezone
+    import hashlib
+
+    from evals.harness import ScriptedClient
+    from app.db.session import session_factory
+    from app.engine.normalize import normalize
+    from app.pipeline import runs as pipeline_runs
+    from scripts import demo_seed
+
+    document = normalize(demo_seed.RESUME)
+    with session_scope() as s:
+        user = s.query(models.User).one()
+        resume = models.Resume(
+            user_id=user.id, version=1, filename="demo.pdf",
+            file_sha256=hashlib.sha256(b"demo").hexdigest(), file_bytes=4,
+            extract_text="demo", raw_json=demo_seed.RESUME.model_dump(),
+            doc_json=document.model_dump(),
+            coverage_json={"dropped": [], "invented": [], "structure": []},
+            status="confirmed", revision=1,
+            confirmed_at=datetime.now(timezone.utc))
+        s.add(resume)
+        s.flush()
+        run = models.Run(user_id=user.id, resume_id=resume.id,
+                         status="created", jd_text=demo_seed.POSTING)
+        s.add(run)
+        s.flush()
+        run_id = run.id
+
+    # Wrapped exactly as `api/runs.py` wraps it: the budget is what counts
+    # calls and tokens, so a bare scripted client would report nothing.
+    from app.io.llm import BudgetedClient, RunBudget
+    client = BudgetedClient(ScriptedClient(demo_seed.ANSWERS), RunBudget())
+    pipeline_runs.execute(session_factory(), run_id, client)
+    return run_id
+
+
+def test_a_live_run_persists_the_validators_verdict(api: TestClient):
+    run_id = _execute_the_demo(api)
+
+    with session_scope() as s:
+        run = s.get(models.Run, run_id)
+        assert run.status == "needs_review", run.error
+        assert run.accepted_json, "accepted operations were not stored"
+        assert run.rejected_json, "the refusals were not stored"
+        codes = {r["code"] for r in run.rejected_json}
+        assert "fabricated_number" in codes, codes
+
+    # And it reaches the screen: the list row and the detail both count them.
+    row = next(r for r in api.get("/api/runs").json() if r["id"] == run_id)
+    assert row["rejected"] >= 1 and row["accepted"] >= 1
+    detail = api.get(f"/api/runs/{run_id}").json()
+    assert detail["rejected_ops"] and detail["accepted_ops"]
+
+
+def test_a_live_run_is_accounted_for(api: TestClient):
+    """Calls, tokens and the proof block used to be written only by `run()`."""
+    run_id = _execute_the_demo(api)
+    with session_scope() as s:
+        run = s.get(models.Run, run_id)
+        assert run.llm_calls and run.llm_calls > 0
+        assert run.tokens and run.tokens > 0
+        assert run.proof_json and all(run.proof_json.values()), run.proof_json
+        assert run.role and run.company
+
+
+def test_a_failed_run_is_still_accounted_for(api: TestClient, monkeypatch):
+    """What was spent before the failure is the most useful number a failed
+    run has, and the proof block says which stages it got through."""
+    from app.pipeline import runs as pipeline_runs
+
+    def explode(*_, **__):
+        raise RuntimeError("the planner fell over")
+
+    monkeypatch.setattr("app.pipeline.run.plan", explode)
+    run_id = _execute_the_demo(api)
+    with session_scope() as s:
+        run = s.get(models.Run, run_id)
+        assert run.status == "failed"
+        assert "fell over" in run.error
+        assert run.llm_calls == 1          # the brief, before the plan
+        assert run.proof_json == {}        # nothing after S3 exists to check
+        assert run.brief_json              # what finished, stayed
+
+
+def test_split_stage_columns_are_one_rule():
+    """`columns_for` is the single place a stage maps to columns, so the seed
+    scripts and the live log cannot disagree about where `validation` lives."""
+    from app.io.dblog import columns_for
+
+    assert columns_for("brief", {"role": "x"}) == {"brief_json": {"role": "x"}}
+    assert columns_for("plan", {"operations": [1], "dropped": []}) == {
+        "ops_json": [1]}
+    assert columns_for("validation", {"accepted": [1], "rejected": [2],
+                                      "fabrication_count": 1}) == {
+        "accepted_json": [1], "rejected_json": [2]}
+    assert columns_for("written", [1, 2]) == {}
+
+
+def test_a_run_whose_setup_fails_is_failed_not_stranded(api: TestClient):
+    """The setup block — load the resume, validate its document, move to
+    `tailoring` — ran outside the handlers, so a `doc_json` that no longer
+    validated raised out of the worker thread and left the run in `created`
+    with no error on it. A run that never starts must still say why."""
+    from app.db.session import session_factory
+    from app.io.llm import BudgetedClient, RunBudget, ScriptedClient
+    from app.pipeline import runs as pipeline_runs
+
+    with session_scope() as s:
+        user = s.query(models.User).one()
+        resume = models.Resume(user_id=user.id, filename="broken.pdf",
+                               file_sha256="b" * 64, status="confirmed",
+                               doc_json={"sections": "not a list"})
+        s.add(resume)
+        s.flush()
+        run = models.Run(user_id=user.id, resume_id=resume.id,
+                         status="created", jd_text="x" * 200)
+        s.add(run)
+        s.flush()
+        run_id = run.id
+
+    pipeline_runs.execute(session_factory(), run_id,
+                          BudgetedClient(ScriptedClient([]), RunBudget()))
+
+    with session_scope() as s:
+        run = s.get(models.Run, run_id)
+        assert run.status == "failed"
+        assert "ValidationError" in run.error

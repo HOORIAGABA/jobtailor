@@ -71,3 +71,6 @@ out/
 Thumbs.db
 .vscode/
 .idea/
+
+# scripts/demo_files.py output: the demo résumé and posting, regenerable
+/demo/

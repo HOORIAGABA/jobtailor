@@ -80,13 +80,18 @@ def start(*, client_id: str, redirect_uri: str, connect: bool = False,
 
 def callback(session: Session, *, client_id: str, client_secret: str,
              redirect_uri: str, code: str, verifier: str,
-             fernet_key: str) -> tuple[User, bool]:
+             fernet_key: str, store_grant: bool = True) -> tuple[User, bool]:
     """Complete either flow. Returns the user and whether Gmail is now connected.
 
     One function for both because the difference is entirely in the scopes that
     come back, and Google — not this code — decides what the person actually
     granted. A user can approve sign-in and decline sending on the same screen,
     and the only honest way to know is to read `scope` from the response.
+
+    `store_grant=False` is the read-only instance: the person is signed in, and
+    a send grant that came back anyway is revoked at Google rather than kept.
+    Dropping it on the floor would leave a live grant on their account that
+    nothing can see — the same lie `disconnect` exists to avoid.
     """
     grant = google.exchange_code(
         client_id=client_id, client_secret=client_secret,
@@ -95,7 +100,11 @@ def callback(session: Session, *, client_id: str, client_secret: str,
 
     user = _upsert_user(session, who)
     connected = False
-    if grant.grants(google.SEND_SCOPE):
+    if grant.grants(google.SEND_SCOPE) and not store_grant:
+        logger.info("Refusing to hold a send grant for %s on a read-only "
+                    "instance; revoking it", who.email)
+        google.revoke(grant.refresh_token or grant.access_token)
+    elif grant.grants(google.SEND_SCOPE):
         _store_grant(session, user, grant, fernet_key)
         connected = True
     else:

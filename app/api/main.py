@@ -66,7 +66,14 @@ SAFE_METHODS = frozenset({"GET", "HEAD", "OPTIONS"})
 
 # The one exception. Signing out only clears a cookie the browser already has,
 # and a demo you cannot sign out of is a demo that has trapped you.
-ALWAYS_ALLOWED = frozenset({"/api/auth/logout"})
+# The two writes a read-only instance still performs, because both are a
+# person withdrawing something rather than changing anything: signing out
+# (`POST`) and disconnecting Gmail (`DELETE`, which revokes the grant at Google
+# and deletes the stored token). A visitor who could connect Gmail but not
+# disconnect it would be worse off for having visited — and `GET
+# /api/auth/google/callback` is the route that used to allow exactly that,
+# because a GET is a safe method and the callback writes.
+ALWAYS_ALLOWED = frozenset({"/api/auth/logout", "/api/auth/google"})
 
 MEDIA = {
     ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
@@ -153,7 +160,14 @@ def create_app(
     origins = Settings().cors_origin_list
     app.add_middleware(
         CORSMiddleware, allow_origins=origins, allow_credentials=True,
-        allow_methods=["GET", "POST", "DELETE"], allow_headers=["*"],
+        # PUT is not optional: `PUT /api/resumes/{id}/draft` is the S0.4 edit
+        # loop, the one screen where a person corrects the parse everything
+        # downstream cites. It was missing, so the preflight answered
+        # "Disallowed CORS method" and saving a correction failed on every
+        # cross-origin deployment — including the documented development setup,
+        # where the UI is on :3000 and the API on :8000.
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["*"],
     )
 
     # The resume half of the product: upload, confirm, edit. Mounted even in

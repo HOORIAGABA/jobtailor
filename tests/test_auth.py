@@ -42,6 +42,17 @@ def test_a_cookie_signed_with_another_secret_is_refused():
         authsession.read(SECRET, token)
 
 
+def test_a_cookie_with_a_non_ascii_character_is_refused_not_a_crash():
+    """`compare_digest` on two `str`s raises when one is non-ASCII, and a
+    cookie is attacker-supplied: this was an unhandled `TypeError` on every
+    authenticated route, for anyone who sent `session=…é`."""
+    token = authsession.issue(SECRET, "user1")
+    head, _, mac = token.rpartition(".")
+    for bad in (head + ".é" + mac[1:], token.replace(".", ".٣", 1)):
+        with pytest.raises(authsession.BadCookie):
+            authsession.read(SECRET, bad)
+
+
 def test_editing_the_user_id_invalidates_the_cookie():
     """The whole threat is forging one of these."""
     token = authsession.issue(SECRET, "user1")
@@ -724,3 +735,113 @@ def test_a_token_with_plenty_of_life_left_is_not_refreshed(db, monkeypatch):
         assert service.access_token(
             s, user, client_id=CLIENT_ID, client_secret="secret",
             fernet_key=KEY) == "ya29.access"
+
+
+# ── read-only: sign in, never hold a grant, always able to withdraw one ──
+#
+# The read-only middleware refuses unsafe methods. `GET /google/callback` is a
+# safe method that writes: on the public instance a visitor could connect Gmail
+# (the callback stored the refresh token) and then could NOT disconnect it,
+# because `DELETE /google` was refused. The one asymmetry a consent flow must
+# never have.
+
+@pytest.fixture
+def locked(tmp_path, monkeypatch) -> TestClient:
+    url = f"sqlite+pysqlite:///{tmp_path / 'auth_ro.db'}"
+    monkeypatch.setenv("DATABASE_URL", url)
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "client-secret")
+    monkeypatch.setenv("GOOGLE_REDIRECT_URI", REDIRECT)
+    monkeypatch.setenv("JWT_SECRET", SECRET)
+    monkeypatch.setenv("FERNET_KEY", KEY)
+    monkeypatch.setenv("FRONTEND_URL", "http://localhost:3000")
+    monkeypatch.delenv("DEV_USER_EMAIL", raising=False)
+    reset(url)
+    create_all(engine())
+    yield TestClient(create_app(tmp_path / "runs", read_only=True),
+                     follow_redirects=False)
+    reset()
+
+
+def _revocations(monkeypatch) -> list[str]:
+    revoked: list[str] = []
+    monkeypatch.setattr(google, "revoke", revoked.append)
+    return revoked
+
+
+def test_a_read_only_instance_still_signs_people_in(locked: TestClient,
+                                                    monkeypatch):
+    """Signing in is how a person sees their own runs on the public instance;
+    it writes a user row, and that write is the point."""
+    _exchanges(monkeypatch, _grant())
+    start = locked.get("/api/auth/google/start")
+    assert start.status_code == 307
+    done = locked.get(f"/api/auth/google/callback?code=4/code"
+                      f"&state={start.cookies[routes.STATE_COOKIE]}")
+    assert done.status_code == 303 and "signed_in=1" in done.headers["location"]
+    with session_scope() as s:
+        assert s.query(models.User).count() == 1
+
+
+def test_a_read_only_instance_refuses_to_start_the_connect_flow(
+        locked: TestClient):
+    response = locked.get("/api/auth/google/start?connect=true")
+    assert response.status_code == 303
+    assert response.headers["location"].endswith("?auth_error=read_only")
+    assert routes.STATE_COOKIE not in response.cookies
+
+
+def test_a_read_only_instance_revokes_a_send_grant_rather_than_storing_it(
+        locked: TestClient, monkeypatch):
+    """★ Defence in depth behind the refusal above: if a send grant reaches
+    the callback anyway, it is revoked at Google, not kept and not dropped —
+    a dropped grant is a live credential nothing can see."""
+    _exchanges(monkeypatch, _grant(send=True))
+    revoked = _revocations(monkeypatch)
+    start = locked.get("/api/auth/google/start")
+    locked.cookies.set(routes.FLOW_COOKIE, "connect")
+    done = locked.get(f"/api/auth/google/callback?code=4/code"
+                      f"&state={start.cookies[routes.STATE_COOKIE]}")
+    assert done.status_code == 303
+    assert "gmail=read_only" in done.headers["location"]
+    assert revoked == ["1//refresh"]
+    with session_scope() as s:
+        assert s.query(models.OAuthToken).count() == 0
+        assert s.query(models.User).count() == 1
+
+
+def test_a_read_only_instance_lets_a_person_disconnect_gmail(
+        locked: TestClient, monkeypatch):
+    """Withdrawing consent is allowed everywhere, like signing out. The row
+    exists because the local instance shares the database with the public
+    one, and a person must be able to revoke from either."""
+    revoked = _revocations(monkeypatch)
+    with session_scope() as s:
+        user = models.User(google_sub="sub", email="a.morgan@example.com")
+        s.add(user)
+        s.flush()
+        s.add(models.OAuthToken(
+            user_id=user.id, provider="google",
+            refresh_token_encrypted=secrets.encrypt(KEY, "1//refresh"),
+            scopes=google.SEND_SCOPE))
+        s.flush()
+        user_id = user.id
+    locked.cookies.set(SESSION_COOKIE, authsession.issue(SECRET, user_id))
+
+    response = locked.delete("/api/auth/google")
+    assert response.status_code == 200, response.text
+    assert response.json()["disconnected"] is True
+    assert revoked == ["1//refresh"]
+
+    # And every other write is still refused: this is an allow-list of two.
+    assert locked.post("/api/runs", json={}).status_code == 403
+
+
+def test_the_service_revokes_when_told_not_to_store(db, monkeypatch):
+    _exchanges(monkeypatch, _grant(send=True))
+    revoked = _revocations(monkeypatch)
+    with session_scope() as s:
+        user, connected = _callback(s, store_grant=False)
+        assert connected is False
+        assert service.connection(s, user) is None
+    assert revoked == ["1//refresh"]

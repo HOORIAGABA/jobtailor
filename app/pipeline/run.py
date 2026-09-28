@@ -353,9 +353,26 @@ def run(
                    cache=cache, semantic_hints=semantic_hints,
                    render_output=render_output,
                    write_outreach=write_outreach)
-    # Accounting belongs to the thing being accounted. This used to live in
-    # `scripts/run.py`, so a run started any other way — the API, a test, a
-    # notebook — produced a manifest claiming no model calls at all.
+    account(log, state, client, smart_client)
+    return state
+
+
+def account(log: RunLog, state: RunState, client: LLMClient,
+            smart_client: LLMClient | None = None) -> None:
+    """The manifest's accounting: calls, tokens, the call log, the proofs.
+
+    Accounting belongs to the thing being accounted. This used to live in
+    `scripts/run.py`, so a run started any other way — the API, a test, a
+    notebook — produced a manifest claiming no model calls at all. Then it
+    lived inline in `run()`, and the product path — `pipeline.runs.execute`,
+    which skips ingest and calls `tailor()` directly — produced a run row with
+    `llm_calls = 0` and an empty proof block, for exactly the same reason. So
+    it is a function now, called by every entry point, and a test asserts the
+    product path calls it.
+
+    Safe to call after a failed stage: it records whatever was spent and
+    whichever proofs can be evaluated on the state that exists.
+    """
     entries = merged_call_log(client, smart_client)
     budget = getattr(client, "budget", None)
     log.note(
@@ -364,7 +381,6 @@ def run(
         call_log=entries,
         proof=proof_checks(state),
     )
-    return state
 
 
 # ── the guarantees, checked ───────────────────────────────────────────

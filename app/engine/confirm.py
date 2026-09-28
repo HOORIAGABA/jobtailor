@@ -92,15 +92,21 @@ def matches(secret: str, token: str, run_id: str, recipient: str,
     parts = token.split(".")
     if len(parts) != 3 or parts[0] != VERSION:
         return False
-    try:
-        expires_at = int(parts[1])
-    except ValueError:
+    # `int()` accepts more than ASCII digits — "٣" and " 12\n" both parse — so
+    # the expiry is checked for the exact shape the issuer writes.
+    if not (parts[1].isascii() and parts[1].isdigit()):
         return False
+    expires_at = int(parts[1])
 
     expected = hmac.new(secret.encode(),
                         _payload(run_id, recipient, subject, body, expires_at),
                         hashlib.sha256).hexdigest()
-    if not hmac.compare_digest(expected, parts[2]):
+    # Compared as bytes. `compare_digest` on two `str`s raises `TypeError` if
+    # either contains a non-ASCII character, and the token is client input:
+    # a single "é" in the signature part turned a 400 into a 500, and a 500
+    # on the send endpoint is the one place a person will press the button
+    # again.
+    if not hmac.compare_digest(expected.encode(), parts[2].encode()):
         return False
     return (now if now is not None else time.time()) < expires_at
 

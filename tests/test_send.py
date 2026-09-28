@@ -314,6 +314,54 @@ def test_sending_twice_is_refused_by_the_column_not_by_luck(db):
         assert len(sender.sent) == 1
 
 
+def test_two_requests_that_both_read_approved_send_once(db):
+    """★ The race the column alone does not close.
+
+    Step 1 reads `sent_at`. Two requests — a double-click, a retry racing the
+    original — can both read it as NULL and both read the status as
+    `approved` before either writes anything. Then both pass every check,
+    both write an audit row and both dispatch. Two emails to a recruiter,
+    from a product whose one promise about sending is "once".
+
+    Simulated exactly: two sessions load the same run, the first sends, and
+    the second still holds the copy it loaded — `approved`, unsent — when it
+    tries. It must lose on the conditional UPDATE, not succeed on its stale
+    read.
+    """
+    from app.db.session import session_factory
+
+    with session_scope() as s:
+        run_id = _approved(s).id
+
+    first, second = session_factory()(), session_factory()()
+    try:
+        run_a = first.get(models.Run, run_id)
+        run_b = second.get(models.Run, run_id)
+        # Kept in a name on purpose: the identity map holds objects weakly,
+        # and a discarded result is collected and re-read fresh on the next
+        # query — which would quietly turn this into the non-race case.
+        stale_message = gate.message_of(second, run_b)
+        user_a, user_b = (x.query(models.User).first() for x in (first, second))
+        sender = ConsoleSender()
+        fields = dict(secret=SECRET, recipient=TO, subject=SUBJECT, body=BODY,
+                      confirm_token=_token(run_a))
+
+        service.send(first, run_a, user_a, sender, **fields)
+        # The second request's view is what it read before the first sent.
+        assert run_b.status == "approved" and stale_message.sent_at is None
+
+        with pytest.raises(service.AlreadySent, match="already sending"):
+            service.send(second, run_b, user_b, sender, **fields)
+        assert len(sender.sent) == 1
+
+        # The loser rolled back: one attempt, one send, in the audit.
+        assert _audit(second, second.get(models.Run, run_id)) == [
+            ("attempted", TO), ("sent", TO)]
+    finally:
+        first.close()
+        second.close()
+
+
 def test_the_idempotency_guard_is_checked_before_the_signature(db):
     """Order matters: a stale token on an already-sent run should report the
     send, not the token, because that is the question the person is asking."""

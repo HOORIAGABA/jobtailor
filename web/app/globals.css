@@ -1,97 +1,404 @@
 @import "tailwindcss";
 
 /*
-  One set of tokens, defined light and redefined for dark. The product is a
-  document tool, so the palette is paper-and-ink: a warm neutral ground, one
-  accent for actions, and colour reserved for status — where it is the
-  information, not decoration.
+  ─────────────────────────────────────────────────────────────────────────────
+  The design system.
+
+  The world this product lives in is a marked-up document: paper, ink, and a
+  proofreader's stamp. So the ground is warm paper, the ink is a near-black with
+  the warmth left in, actions and citations are fountain-pen blue, and **stamp
+  red is spent on exactly one thing — a refusal.** Nothing else on any screen is
+  allowed that colour, which is what makes a refusal register before it is read.
+
+  Typography is inverted from the usual pairing on purpose. Headings, buttons and
+  labels are a heavy engineering sans (Archivo, tight tracking); prose — the
+  explanations, the rationales, the diff lines — is a reading serif (Newsreader);
+  ids, rule codes and citations are monospace. Serif display over sans body is
+  what every other tool does. A product about documents should read like one.
+
+  Tokens live in :root as plain custom properties, then `@theme inline` hands
+  them to Tailwind so `bg-surface` / `text-ink-soft` / `border-line` exist as
+  utilities. That indirection earns its paragraph: a component never hard-codes a
+  hex, dark mode is one block rather than a `dark:` prefix on every element, and
+  the two cannot drift apart.
+  ─────────────────────────────────────────────────────────────────────────────
 */
-@theme {
-  --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto,
-    "Helvetica Neue", Arial, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
-}
 
 :root {
-  --ground: #faf9f7;
+  /* paper */
+  --ground: #fbf8f1;
   --surface: #ffffff;
-  --line: #e5e2dd;
-  --ink: #1c1917;
-  --ink-soft: #57534e;
-  --ink-faint: #8a827a;
-  --accent: #1d4ed8;
+  --raised: #ffffff;
+  --sunken: #f2ede2;
+
+  --line: #e1d9c9;
+  --line-soft: #ede7da;
+
+  /* ink, with the warmth left in — a pure grey looks unconsidered */
+  --ink: #17140f;
+  --ink-soft: #574f42;
+  --ink-faint: #8c8373;
+
+  /* fountain pen: actions, links, citations */
+  --accent: #1b3a8f;
+  --accent-hover: #142c6d;
   --accent-ink: #ffffff;
-  --good: #15803d;
-  --warn: #a16207;
-  --bad: #b91c1c;
-  --good-bg: #ecfdf3;
-  --warn-bg: #fefce8;
-  --bad-bg: #fef2f2;
+  --accent-soft: #e8edfa;
+  --accent-line: #bfceee;
+
+  /* verified */
+  --good: #1b6347;
+  --good-bg: #e8f3ed;
+  --good-line: #bedccc;
+
+  /* a gap, a caution — amber rather than a second red */
+  --warn: #8a5a0b;
+  --warn-bg: #fbf1dc;
+  --warn-line: #e8d3a6;
+
+  /* ★ the stamp. Refusals only. */
+  --bad: #a82a1c;
+  --bad-bg: #fbedea;
+  --bad-line: #efc9c2;
+
+  /*
+    Two stacked layers — a tight contact edge and a wide diffuse lift — both
+    warm-tinted to sit on warm paper. A single flat rgba shadow is what makes
+    cheap UI look printed-on.
+  */
+  --shadow-sm: 0 1px 2px rgb(23 20 15 / 0.05), 0 1px 3px rgb(23 20 15 / 0.04);
+  --shadow-md: 0 1px 2px rgb(23 20 15 / 0.05), 0 10px 22px -10px rgb(23 20 15 / 0.16);
+  --shadow-lg: 0 2px 4px rgb(23 20 15 / 0.06), 0 22px 44px -16px rgb(23 20 15 / 0.22);
+  --ring: 0 0 0 3px rgb(27 58 143 / 0.16);
 }
 
+/*
+  Dark mode is declared twice on purpose: once behind the media query, guarded so
+  an explicit `data-theme="light"` still wins, and once for an explicit
+  `data-theme="dark"`. Without the guard, a person who chooses light on a machine
+  set to dark gets overruled by their operating system.
+*/
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
-    --ground: #17161a;
-    --surface: #1f1e23;
-    --line: #35333a;
-    --ink: #f4f2ef;
-    --ink-soft: #b5b0a9;
-    --ink-faint: #8b857e;
-    --accent: #7ba2ff;
-    --accent-ink: #12121a;
-    --good: #6ee7a8;
-    --warn: #fbc95c;
-    --bad: #fca5a5;
-    --good-bg: #10281c;
-    --warn-bg: #2a2413;
-    --bad-bg: #2b1616;
+    color-scheme: dark;
+
+    --ground: #12110f;
+    --surface: #1a1816;
+    --raised: #211e1b;
+    --sunken: #171512;
+
+    --line: #302c27;
+    --line-soft: #26231f;
+
+    --ink: #f6f2e9;
+    --ink-soft: #b4ac9d;
+    --ink-faint: #857d6f;
+
+    --accent: #94b1f5;
+    --accent-hover: #b4c8f9;
+    --accent-ink: #0e1119;
+    --accent-soft: #171c2c;
+    --accent-line: #2c3a5c;
+
+    --good: #6fd3a5;
+    --good-bg: #0f241b;
+    --good-line: #1f4636;
+
+    --warn: #e7bc6a;
+    --warn-bg: #241d0f;
+    --warn-line: #453818;
+
+    --bad: #f0938a;
+    --bad-bg: #241412;
+    --bad-line: #4a2620;
+
+    /* Shadows barely read on a dark ground, so depth shifts to a lit top edge —
+       the same trick a physical bezel uses. */
+    --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.03);
+    --shadow-md: 0 8px 20px -8px rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.04);
+    --shadow-lg: 0 18px 40px -14px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.05);
+    --ring: 0 0 0 3px rgb(148 177 245 / 0.22);
   }
 }
 
 :root[data-theme="dark"] {
-  --ground: #17161a;
-  --surface: #1f1e23;
-  --line: #35333a;
-  --ink: #f4f2ef;
-  --ink-soft: #b5b0a9;
-  --ink-faint: #8b857e;
-  --accent: #7ba2ff;
-  --accent-ink: #12121a;
-  --good: #6ee7a8;
-  --warn: #fbc95c;
-  --bad: #fca5a5;
-  --good-bg: #10281c;
-  --warn-bg: #2a2413;
-  --bad-bg: #2b1616;
+  color-scheme: dark;
+
+  --ground: #12110f;
+  --surface: #1a1816;
+  --raised: #211e1b;
+  --sunken: #171512;
+
+  --line: #302c27;
+  --line-soft: #26231f;
+
+  --ink: #f6f2e9;
+  --ink-soft: #b4ac9d;
+  --ink-faint: #857d6f;
+
+  --accent: #94b1f5;
+  --accent-hover: #b4c8f9;
+  --accent-ink: #0e1119;
+  --accent-soft: #171c2c;
+  --accent-line: #2c3a5c;
+
+  --good: #6fd3a5;
+  --good-bg: #0f241b;
+  --good-line: #1f4636;
+
+  --warn: #e7bc6a;
+  --warn-bg: #241d0f;
+  --warn-line: #453818;
+
+  --bad: #f0938a;
+  --bad-bg: #241412;
+  --bad-line: #4a2620;
+
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.45), inset 0 1px 0 rgb(255 255 255 / 0.03);
+  --shadow-md: 0 8px 20px -8px rgb(0 0 0 / 0.6), inset 0 1px 0 rgb(255 255 255 / 0.04);
+  --shadow-lg: 0 18px 40px -14px rgb(0 0 0 / 0.7), inset 0 1px 0 rgb(255 255 255 / 0.05);
+  --ring: 0 0 0 3px rgb(148 177 245 / 0.22);
+}
+
+/* `inline` so the generated utilities resolve the variable at use time, which is
+   what lets the one dark-mode block above cover the whole app. */
+@theme inline {
+  --font-sans: "Archivo", ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+    Roboto, "Helvetica Neue", Arial, sans-serif;
+  --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
+  --font-mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas,
+    monospace;
+
+  --color-ground: var(--ground);
+  --color-surface: var(--surface);
+  --color-raised: var(--raised);
+  --color-sunken: var(--sunken);
+
+  --color-line: var(--line);
+  --color-line-soft: var(--line-soft);
+
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-faint: var(--ink-faint);
+
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-ink: var(--accent-ink);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-line: var(--accent-line);
+
+  --color-good: var(--good);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-good-bg: var(--good-bg);
+  --color-warn-bg: var(--warn-bg);
+  --color-bad-bg: var(--bad-bg);
+  --color-good-line: var(--good-line);
+  --color-warn-line: var(--warn-line);
+  --color-bad-line: var(--bad-line);
+
+  --shadow-card: var(--shadow-sm);
+  --shadow-lift: var(--shadow-md);
+  --shadow-float: var(--shadow-lg);
 }
 
 html {
   color-scheme: light dark;
+  scroll-behavior: smooth;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  html {
+    scroll-behavior: auto;
+  }
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
 }
 
 body {
   background: var(--ground);
   color: var(--ink);
+  /* Sans is the UI default; prose opts into the serif with `font-serif`. */
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  /* Numbers line up in columns: token counts, versions, change counts. */
+  font-variant-numeric: tabular-nums;
 }
 
-/* Focus is never removed, only restyled: this is a form-heavy product and the
+/* Headings are the engineering half of the pairing: heavy, tight, unfussy. */
+h1,
+h2,
+h3 {
+  font-family: var(--font-sans);
+  letter-spacing: -0.025em;
+}
+
+::selection {
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+/* Focus is restyled, never removed: this is a form-heavy product and the
    keyboard path through it has to be visible. */
 :focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 2px;
-  border-radius: 3px;
+  border-radius: 4px;
 }
 
-input,
-textarea,
-select,
-button {
-  font: inherit;
-  color: inherit;
+/* In `@layer base`, and this matters. Tailwind v4 puts every utility in
+   `@layer utilities`, and an UNLAYERED rule beats any layered one regardless
+   of order or specificity — so a bare `button { color: inherit }` overrode
+   `text-ground` on every primary button and rendered ink-on-ink: a solid
+   black pill with no label, on "Tailor it", "Approve" and "Send it", which
+   are the three buttons the product exists for. Found by screenshotting the
+   flow, not by the type checker — CSS has none. */
+@layer base {
+  input,
+  textarea,
+  select,
+  button {
+    font: inherit;
+    color: inherit;
+  }
+
+  textarea {
+    field-sizing: content;
+  }
 }
 
-textarea {
-  field-sizing: content;
+/* ── the few things worth a class rather than a utility pile ───────────────── */
+
+/* An uppercase label above a heading. Tracking is mandatory at this size. */
+.eyebrow {
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/*
+  ★ The stamp.
+
+  The one deliberately loud element in the whole product, and it is loud because
+  refusing is the product's claim. A rotated ruled box in stamp red over a
+  rejected operation — a proofreader's mark, which is exactly what it is.
+*/
+.stamp {
+  display: inline-block;
+  transform: rotate(-7deg);
+  border: 2.5px solid var(--bad);
+  color: var(--bad);
+  border-radius: 6px;
+  padding: 2px 8px;
+  font-weight: 800;
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  opacity: 0.9;
+}
+
+/*
+  The hero's ground: a dot grid that fades out, so the landing screen has texture
+  without an image to download.
+
+  ★ The grid lives on a pseudo-element, and that is not a stylistic choice.
+  `mask-image` masks an element **and everything inside it**, so putting the mask
+  on the section itself faded the headline, the lede and both buttons into the
+  background along with the dots. It looked like a broken theme. The mask has to
+  apply to a layer that holds only the texture.
+
+  `isolation: isolate` creates a stacking context on the section so the
+  `z-index: -1` layer sits behind the section's own content and no further —
+  without it, a negative z-index escapes and hides behind the page background,
+  where nothing is visible at all.
+*/
+.dotfield {
+  position: relative;
+  isolation: isolate;
+}
+
+.dotfield::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  background-image: radial-gradient(var(--line) 1px, transparent 1px);
+  background-size: 22px 22px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 70% 60% at 50% 0%,
+    #000 30%,
+    transparent 75%
+  );
+  mask-image: radial-gradient(
+    ellipse 70% 60% at 50% 0%,
+    #000 30%,
+    transparent 75%
+  );
+}
+
+/* A loading state that occupies the shape of the thing that is coming, rather
+   than a spinner that says only "wait". */
+.skeleton {
+  background: linear-gradient(
+    90deg,
+    var(--sunken) 25%,
+    var(--line-soft) 37%,
+    var(--sunken) 63%
+  );
+  background-size: 400% 100%;
+  animation: shimmer 1.4s ease-in-out infinite;
+}
+
+@keyframes shimmer {
+  0% {
+    background-position: 100% 0;
+  }
+  100% {
+    background-position: 0 0;
+  }
+}
+
+.rise {
+  animation: rise 0.28s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+/* The live dot on an in-progress status: an expanding ring, so it reads as
+   activity rather than as a bullet point. */
+.pulse::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 9999px;
+  border: 1px solid currentColor;
+  animation: pulse 1.8s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+  100% {
+    opacity: 0;
+    transform: scale(2.6);
+  }
 }

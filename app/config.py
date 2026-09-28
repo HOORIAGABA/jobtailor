@@ -28,6 +28,11 @@ DEV_EMAIL_ENV = "DEV_USER_EMAIL"
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
         env_file=str(BASE_DIR / ".env"),
+        # Explicit, because the default is the locale's encoding, which on
+        # Windows is cp1252 — so a `.env` with an em dash in a comment (the
+        # example file has several) raised `UnicodeDecodeError` from inside
+        # pydantic on the platform this is developed on and nowhere else.
+        env_file_encoding="utf-8",
         extra="ignore",
         # `model_` is a pydantic namespace; ours are LLM_* so there is no clash,
         # but be explicit rather than relying on it.

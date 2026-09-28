@@ -100,6 +100,11 @@ def start(request: Request, connect: bool = False) -> RedirectResponse:
     """
     settings = _settings()
     if connect:
+        if _read_only(request):
+            # A GET, so the read-only middleware does not see it — and the
+            # callback it leads to is also a GET, and writes. Refused here,
+            # before the round trip, and the UI is told why.
+            return _back(settings, "?auth_error=read_only")
         _fernet_key(settings)          # refuse before the round trip, not after
 
     hint = ""
@@ -151,6 +156,7 @@ def callback(request: Request, code: str = "", state: str = "",
         logger.warning("Refused a callback whose state did not match")
         return _back(settings, "?auth_error=bad_state")
 
+    read_only = _read_only(request)
     try:
         user, connected = service.callback(
             session,
@@ -158,13 +164,19 @@ def callback(request: Request, code: str = "", state: str = "",
             client_secret=settings.google_client_secret,
             redirect_uri=settings.google_redirect_uri,
             code=code, verifier=verifier,
-            fernet_key=settings.fernet_key)
+            fernet_key=settings.fernet_key,
+            # Signing in is allowed on a read-only instance — it is how a
+            # person sees their own runs there — but holding a credential
+            # that could send is not. A grant that arrives anyway is revoked,
+            # not stored.
+            store_grant=not read_only)
     except google.GoogleError as exc:
         logger.warning("Google sign-in failed: %s", exc)
         return _back(settings, "?auth_error=exchange_failed")
 
     was_connecting = (request.cookies.get(FLOW_COOKIE) or "") == "connect"
     landing = "?gmail=connected" if connected else (
+        "?gmail=read_only" if was_connecting and read_only else
         "?gmail=declined" if was_connecting else "?signed_in=1")
 
     response = _back(settings, landing)
@@ -204,6 +216,10 @@ def disconnect(session: Session = Depends(get_session),
     removed = service.disconnect(session, user,
                                  fernet_key=settings.fernet_key)
     return {"disconnected": removed, "gmail_connected": False}
+
+
+def _read_only(request: Request) -> bool:
+    return bool(getattr(request.app.state, "read_only", False))
 
 
 def _back(settings: Settings, query: str) -> RedirectResponse:

@@ -18,6 +18,12 @@
  * Rejecting blocks sending and keeps the files — the likeliest real rejection is
  * a good resume with a clumsy covering letter, and a gate that destroyed the
  * resume to punish the email would make the honest answer the expensive one.
+ *
+ * On the visual design of this page specifically: the diff is the only thing on
+ * it that must be read carefully, so the diff is the only thing that gets colour
+ * fills. Everything else — gaps, refusals, standing — is a hairline and a label.
+ * A screen where six panels all shout has no emphasis left for the one that
+ * matters.
  */
 "use client";
 
@@ -25,12 +31,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 
 import { ApiError, api, connectGmailUrl, emlUrl, fileUrl } from "@/lib/api";
-import type {
-  Capabilities,
-  Preview,
-  RunDetail,
-  SendResult,
-} from "@/lib/types";
+import type { Capabilities, Preview, RunDetail, SendResult } from "@/lib/types";
 import {
   Button,
   Card,
@@ -38,9 +39,16 @@ import {
   Field,
   Loading,
   Muted,
+  Page,
+  PageHeader,
   Problem,
+  Spinner,
+  Stamp,
+  Stat,
   Status,
+  Tag,
 } from "@/components/ui";
+import { Alert, Arrow, Check, Cross, Doc, Mail } from "@/components/icons";
 
 /** How often a running run is re-read. A stage takes tens of seconds, so this is
  *  responsive without being a busy loop — and polling rather than the SSE stream
@@ -129,9 +137,12 @@ export default function RunPage() {
       // with no way to send it.
       seeded.current = true;
       api
-        .get<{ recipient: string; subject: string; body: string; confirm_token: string }>(
-          `/api/runs/${id}/approved`,
-        )
+        .get<{
+          recipient: string;
+          subject: string;
+          body: string;
+          confirm_token: string;
+        }>(`/api/runs/${id}/approved`)
         .then((ready) => {
           setTo(ready.recipient);
           setSubject(ready.subject);
@@ -197,41 +208,50 @@ export default function RunPage() {
   }
 
   if (!run && error) return <Problem error={error} onRetry={() => void load()} />;
-  if (!run) return <Loading what="this application" />;
+  if (!run)
+    return (
+      <Card title="This application">
+        <Loading what="this application" rows={3} />
+      </Card>
+    );
 
   const consoleOnly = caps?.mail_provider?.startsWith("console") ?? false;
 
   return (
-    <div className="space-y-6">
-      <Card
-        title={
-          <span className="flex flex-wrap items-baseline gap-2">
-            {run.role || "Untitled role"}
-            {run.company && (
-              <span className="text-sm font-normal" style={{ color: "var(--ink-soft)" }}>
-                {run.company}
-              </span>
-            )}
-            <Status value={run.status} />
-          </span>
-        }
-        aside={
-          <>
-            {run.llm_calls} model call{run.llm_calls === 1 ? "" : "s"}
-            {run.tokens ? ` · ${run.tokens.toLocaleString()} tokens` : ""}
-          </>
-        }
-      >
+    <div className="space-y-6 pb-4">
+      <PageHeader
+        back={{ href: "/app", label: "Applications" }}
+        eyebrow={run.company || undefined}
+        title={run.role || "Untitled role"}
+        actions={<Status value={run.status} />}
+      />
+
+      <Card>
         <Progress run={run} />
+        {(run.llm_calls > 0 || run.changes > 0) && (
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
+            {/* `changes`, not `accepted`: an accepted `flag_gap` or `ask_user`
+                changes nothing in the document, and a card saying "6 changes
+                applied" above a diff listing 2 is a card the reader stops
+                trusting. */}
+            <Stat label="changes applied" value={run.changes} />
+            <Stat label="refused" value={run.rejected} />
+            <Stat
+              label={`model call${run.llm_calls === 1 ? "" : "s"}`}
+              value={run.llm_calls}
+            />
+            <Stat label="tokens" value={run.tokens.toLocaleString()} />
+          </div>
+        )}
       </Card>
 
       {error && <Problem error={error} onRetry={() => void load()} />}
 
       {run.status === "failed" && (
-        <Card title="It stopped" tone="bad">
-          <p className="font-mono text-xs whitespace-pre-wrap">
+        <Card tone="bad" title="It stopped">
+          <pre className="overflow-x-auto rounded-lg border border-bad-line bg-bad-bg p-3 font-mono text-xs whitespace-pre-wrap">
             {run.error || "no reason recorded"}
-          </p>
+          </pre>
           <div className="mt-3">
             <Button href="/runs/new">Try another posting</Button>
           </div>
@@ -253,38 +273,59 @@ export default function RunPage() {
                 said what this posting asks for.
               </Empty>
             ) : (
-              <ul className="space-y-3">
+              <ul className="space-y-4">
                 {preview.changes.map((change, i) => (
-                  <li key={change.op_id ?? i} className="text-sm">
-                    <div className="text-xs" style={{ color: "var(--ink-faint)" }}>
-                      {change.op_kind}
-                      {change.label ? ` · ${change.label}` : ` · ${change.ref_id}`}
+                  <li
+                    key={change.op_id ?? i}
+                    className="border-b border-line-soft pb-4 last:border-0 last:pb-0"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <Tag>{change.op_kind}</Tag>
+                      <span className="font-mono text-xs text-ink-faint">
+                        {change.label || change.ref_id}
+                      </span>
                     </div>
+
                     {change.before && (
-                      <p
-                        className="mt-1 rounded px-2 py-1 line-through"
-                        style={{ background: "var(--bad-bg)", color: "var(--ink-soft)" }}
-                      >
-                        {change.before}
+                      <p className="mt-2 flex gap-2 rounded-lg border border-bad-line bg-bad-bg px-2.5 py-1.5 text-sm/6">
+                        <span
+                          aria-hidden
+                          className="shrink-0 font-mono text-bad select-none"
+                        >
+                          −
+                        </span>
+                        <span className="text-ink-soft line-through decoration-bad/40">
+                          {change.before}
+                        </span>
                       </p>
                     )}
                     {change.after && (
-                      <p
-                        className="mt-1 rounded px-2 py-1"
-                        style={{ background: "var(--good-bg)" }}
-                      >
-                        {change.after}
+                      <p className="mt-1.5 flex gap-2 rounded-lg border border-good-line bg-good-bg px-2.5 py-1.5 text-sm/6">
+                        <span
+                          aria-hidden
+                          className="shrink-0 font-mono text-good select-none"
+                        >
+                          +
+                        </span>
+                        <span>{change.after}</span>
                       </p>
                     )}
                     {change.rationale && (
-                      <p className="mt-1 text-xs" style={{ color: "var(--ink-soft)" }}>
+                      <p className="mt-2 text-sm/6 text-ink-soft">
                         {change.rationale}
                       </p>
                     )}
                     {change.cites && change.cites.length > 0 && (
-                      <p className="mt-0.5 font-mono text-xs"
-                         style={{ color: "var(--ink-faint)" }}>
-                        supported by {change.cites.join(", ")}
+                      <p className="mt-1.5 flex flex-wrap items-center gap-1.5 text-xs text-ink-faint">
+                        supported by
+                        {change.cites.map((c) => (
+                          <span
+                            key={c}
+                            className="rounded border border-line bg-sunken px-1.5 py-0.5 font-mono"
+                          >
+                            {c}
+                          </span>
+                        ))}
                       </p>
                     )}
                   </li>
@@ -295,43 +336,29 @@ export default function RunPage() {
 
           {preview.gaps.length > 0 && (
             <Card
-              title="What the posting wants and your resume does not show"
               tone="warn"
+              title="What the posting wants and your resume does not show"
+              aside={`${preview.gaps.length} gap${preview.gaps.length === 1 ? "" : "s"}`}
             >
               <Muted>
                 These were left alone on purpose. Nothing was invented to cover
                 them — that is the one thing this tool will not do for you.
               </Muted>
-              <ul className="mt-3 space-y-1 text-sm">
+              <ul className="mt-3 space-y-2.5">
                 {preview.gaps.map((gap, i) => (
-                  <li key={i}>
-                    <span className="font-medium">{gap.requirement}</span>
-                    {gap.severity && (
-                      <span style={{ color: "var(--ink-soft)" }}>
-                        {" "}— {gap.severity.replace(/_/g, " ")}
-                      </span>
-                    )}
+                  <li
+                    key={i}
+                    className="border-b border-line-soft pb-2.5 text-sm last:border-0 last:pb-0"
+                  >
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{gap.requirement}</span>
+                      {gap.severity && (
+                        <Tag tone="warn">{gap.severity.replace(/_/g, " ")}</Tag>
+                      )}
+                    </div>
                     {gap.closest_evidence && gap.closest_evidence.length > 0 && (
-                      <span className="font-mono text-xs"
-                            style={{ color: "var(--ink-faint)" }}>
-                        {" "}closest: {gap.closest_evidence.join(", ")}
-                      </span>
-                    )}
-                  </li>
-                ))}
-              </ul>
-            </Card>
-          )}
-
-          {preview.questions.length > 0 && (
-            <Card title="Worth answering before you apply">
-              <ul className="space-y-3 text-sm">
-                {preview.questions.map((q, i) => (
-                  <li key={i}>
-                    <p>{q.question}</p>
-                    {q.context && (
-                      <p className="mt-1 text-xs" style={{ color: "var(--ink-faint)" }}>
-                        about: {q.context}
+                      <p className="mt-1 font-mono text-xs text-ink-faint">
+                        closest: {gap.closest_evidence.join(", ")}
                       </p>
                     )}
                   </li>
@@ -340,22 +367,71 @@ export default function RunPage() {
             </Card>
           )}
 
+          {preview.questions.length > 0 && (
+            <Card
+              title="Worth answering before you apply"
+              aside={`${preview.questions.length}`}
+            >
+              <ul className="space-y-3">
+                {preview.questions.map((q, i) => (
+                  <li key={i} className="flex gap-2.5">
+                    <span className="mt-0.5 shrink-0 font-mono text-xs text-ink-faint">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <div className="min-w-0">
+                      <p className="text-sm/6">{q.question}</p>
+                      {q.context && (
+                        <p className="mt-0.5 text-xs text-ink-faint">
+                          about: {q.context}
+                        </p>
+                      )}
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </Card>
+          )}
+
           {preview.rejections.length > 0 && (
-            <Card title="Changes that were refused" tone="warn">
+            <Card
+              tone="warn"
+              title="Changes that were refused"
+              aside={`${preview.rejections.length} refused`}
+            >
               <Muted>
                 The model proposed these and a rule refused them. Shown because a
                 refusal you cannot see is a refusal you cannot check.
               </Muted>
-              <ul className="mt-3 space-y-1 text-sm">
+              <ul className="mt-4 space-y-3">
                 {preview.rejections.map((r, i) => (
-                  <li key={i}>
-                    <span className="font-mono text-xs">{r.code}</span>
-                    {r.op_kind ? (
-                      <span style={{ color: "var(--ink-faint)" }}>
-                        {" "}on {r.op_kind}
+                  <li
+                    key={i}
+                    className="relative rounded-lg border border-bad-line bg-bad-bg px-3.5 pt-3 pb-3.5"
+                  >
+                    {/* ★ The one loud element in the product. A refusal is what
+                        this system exists to be able to do, so it gets a
+                        proofreader's mark rather than a polite grey label. */}
+                    <span className="absolute end-2.5 top-2.5">
+                      <Stamp />
+                    </span>
+                    <span className="font-mono text-xs font-medium text-bad">
+                      {r.code}
+                    </span>
+                    {r.op_kind && (
+                      <span className="ms-2 text-xs text-ink-faint">
+                        on {r.op_kind}
                       </span>
-                    ) : null}
-                    {r.detail ? ` — ${r.detail}` : ""}
+                    )}
+                    {r.detail && (
+                      <p className="mt-1.5 pe-24 font-serif text-[15px]/6 text-ink-soft">
+                        {r.detail}
+                      </p>
+                    )}
+                    {r.ask_user && (
+                      <p className="mt-1.5 text-xs text-ink-faint">
+                        It asked rather than guessed — see the questions above.
+                      </p>
+                    )}
                   </li>
                 ))}
               </ul>
@@ -366,13 +442,15 @@ export default function RunPage() {
 
           <Card
             title="The email"
-            aside={preview.problems.length > 0 ? "read the notes below" : undefined}
+            aside={
+              preview.problems.length > 0 ? "read the notes below" : undefined
+            }
           >
             <Muted>
               Edit anything. What you approve is what gets sent — the exact text,
               not whatever the draft said a minute ago.
             </Muted>
-            <div className="mt-3 space-y-3">
+            <div className="mt-4 space-y-3">
               <Field
                 label="To"
                 value={to}
@@ -392,42 +470,43 @@ export default function RunPage() {
             </div>
 
             {preview.problems.length > 0 && (
-              <ul
-                className="mt-3 space-y-1 rounded-md p-3 text-sm"
-                style={{ background: "var(--warn-bg)", color: "var(--warn)" }}
-              >
+              <ul className="mt-4 space-y-1.5 rounded-lg border border-warn-line bg-warn-bg p-3 text-sm">
                 {preview.problems.map((p, i) => (
-                  <li key={i}>{p}</li>
+                  <li key={i} className="flex gap-2">
+                    <Alert size={15} className="mt-0.5 shrink-0 text-warn" />
+                    <span className="text-ink-soft">{p}</span>
+                  </li>
                 ))}
               </ul>
             )}
           </Card>
 
-          <div
-            className="sticky bottom-0 -mx-4 border-t px-4 py-3 sm:mx-0 sm:rounded-lg sm:border"
-            style={{ background: "var(--surface)", borderColor: "var(--line)" }}
-          >
-            <div className="flex flex-wrap items-center gap-3">
+          {/* The decision. Sticky, because the gate is long and the point of it
+              is that the person has scrolled through the whole thing — not that
+              they hunted for a button at the end. */}
+          <div className="sticky bottom-0 -mx-4 border-t border-line bg-surface/90 px-4 py-3 backdrop-blur-md sm:mx-0 sm:rounded-xl sm:border sm:shadow-float">
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <Button
                 kind="danger"
                 onClick={() => void decide("reject")}
                 busy={busy === "reject"}
+                icon={<Cross size={15} />}
               >
                 Reject
               </Button>
-              <span className="text-xs" style={{ color: "var(--ink-faint)" }}>
+              <span className="min-w-0 flex-1 text-xs text-ink-faint">
                 Rejecting blocks sending. You keep the files either way.
               </span>
-              <span className="ms-auto">
-                <Button
-                  kind="primary"
-                  onClick={() => void decide("approve")}
-                  busy={busy === "approve"}
-                  disabled={!to.trim()}
-                >
-                  Approve
-                </Button>
-              </span>
+              <Button
+                kind="primary"
+                onClick={() => void decide("approve")}
+                busy={busy === "approve"}
+                disabled={!to.trim()}
+                icon={<Check size={15} />}
+                title={!to.trim() ? "Add a recipient first" : undefined}
+              >
+                Approve
+              </Button>
             </div>
           </div>
         </>
@@ -435,57 +514,79 @@ export default function RunPage() {
 
       {/* the send panel */}
       {run.status === "approved" && !sent && (
-        <Card title="Ready to send" tone="good">
-          <dl className="grid gap-x-4 gap-y-1 text-sm sm:grid-cols-[auto_1fr]">
-            <dt style={{ color: "var(--ink-faint)" }}>To</dt>
-            <dd>{to}</dd>
-            <dt style={{ color: "var(--ink-faint)" }}>Subject</dt>
-            <dd>{subject}</dd>
-          </dl>
-          <p className="mt-3 text-sm whitespace-pre-wrap">{body}</p>
-
-          <div className="mt-4 flex flex-wrap items-center gap-3">
-            <Button kind="primary" onClick={() => void send()} busy={busy === "send"}>
-              {consoleOnly ? "Produce the email" : "Send it"}
-            </Button>
-            <Button href={emlUrl(run.id)}>Download the .eml</Button>
-            {consoleOnly ? (
-              <span className="text-xs" style={{ color: "var(--ink-faint)" }}>
-                This instance is set to the console backend: it writes the real
-                message and dispatches nothing.
-              </span>
-            ) : (
-              <a
-                href={connectGmailUrl}
-                className="text-xs underline"
-                style={{ color: "var(--accent)" }}
+        <Card
+          tone="good"
+          title="Ready to send"
+          aside={consoleOnly ? "console backend" : "Gmail"}
+          footer={
+            <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+              <Button
+                kind="primary"
+                onClick={() => void send()}
+                busy={busy === "send"}
+                icon={<Mail size={15} />}
               >
-                Connect a different Gmail account
-              </a>
-            )}
+                {consoleOnly ? "Produce the email" : "Send it"}
+              </Button>
+              <Button href={emlUrl(run.id)} size="sm">
+                Download the .eml
+              </Button>
+              <span className="min-w-0 flex-1 text-xs text-ink-faint">
+                {consoleOnly ? (
+                  "This instance is set to the console backend: it writes the real message and dispatches nothing."
+                ) : (
+                  <a
+                    href={connectGmailUrl}
+                    className="text-accent underline decoration-accent-line underline-offset-2"
+                  >
+                    Connect a different Gmail account
+                  </a>
+                )}
+              </span>
+            </div>
+          }
+        >
+          <dl className="grid gap-x-4 gap-y-1.5 text-sm sm:grid-cols-[5rem_1fr]">
+            <dt className="text-ink-faint">To</dt>
+            <dd className="font-medium break-all">{to}</dd>
+            <dt className="text-ink-faint">Subject</dt>
+            <dd className="font-medium">{subject}</dd>
+          </dl>
+          <div className="mt-3 rounded-lg border border-line bg-sunken p-3 text-sm/6 whitespace-pre-wrap">
+            {body}
           </div>
         </Card>
       )}
 
       {sent && (
-        <Card title={sent.dispatched ? "Sent" : "Produced, not sent"} tone="good">
-          <Muted>
-            {sent.dispatched
-              ? `Delivered through ${sent.provider}. Provider reference ${sent.provider_message_id}.`
-              : `The console backend produced the message and dispatched nothing. ` +
-                `Set MAIL_PROVIDER=gmail_api to send for real.`}
-          </Muted>
-          <p className="mt-2 text-sm">
-            Attached: {sent.attachments.join(", ") || "nothing"}
-          </p>
-          <div className="mt-3">
-            <Button href={emlUrl(run.id)}>Download what went out</Button>
+        <Card
+          tone="good"
+          title={sent.dispatched ? "Sent" : "Produced, not sent"}
+          aside={sent.sent_at?.slice(0, 16).replace("T", " ")}
+        >
+          <div className="flex gap-3">
+            <Check size={18} className="mt-0.5 shrink-0 text-good" />
+            <div className="min-w-0">
+              <Muted>
+                {sent.dispatched
+                  ? `Delivered through ${sent.provider}. Provider reference ${sent.provider_message_id}.`
+                  : "The console backend produced the message and dispatched nothing. Set MAIL_PROVIDER=gmail_api to send for real."}
+              </Muted>
+              <p className="mt-2 text-sm text-ink-soft">
+                Attached: {sent.attachments.join(", ") || "nothing"}
+              </p>
+              <div className="mt-3">
+                <Button href={emlUrl(run.id)} size="sm">
+                  Download what went out
+                </Button>
+              </div>
+            </div>
           </div>
         </Card>
       )}
 
       {run.status === "rejected" && (
-        <Card title="Rejected" tone="warn">
+        <Card tone="warn" title="Rejected">
           <Muted>
             Nothing will be sent. The tailored files are still here — rejecting
             meant &ldquo;not on my behalf&rdquo;, not &ldquo;destroy the
@@ -495,13 +596,27 @@ export default function RunPage() {
       )}
 
       {run.can_download && run.artifacts.length > 0 && (
-        <Card title="Files">
-          <ul className="flex flex-wrap gap-2">
+        <Card title="Files" aside={`${run.artifacts.length}`}>
+          <ul className="grid gap-2 sm:grid-cols-2">
             {run.artifacts.map((a) => (
               <li key={a.stage}>
-                <Button href={fileUrl(run.id, a.stage)}>
-                  {a.filename} · {Math.max(1, Math.round(a.bytes / 1024))} KB
-                </Button>
+                <a
+                  href={fileUrl(run.id, a.stage)}
+                  className="flex items-center gap-3 rounded-lg border border-line px-3 py-2.5 transition-colors hover:bg-sunken"
+                >
+                  <span className="grid size-8 shrink-0 place-items-center rounded-md bg-accent-soft text-accent">
+                    <Doc size={15} />
+                  </span>
+                  <span className="min-w-0 flex-1">
+                    <span className="block truncate text-sm font-medium">
+                      {a.filename}
+                    </span>
+                    <span className="text-xs text-ink-faint">
+                      {Math.max(1, Math.round(a.bytes / 1024))} KB
+                    </span>
+                  </span>
+                  <Arrow size={15} className="shrink-0 text-ink-faint" />
+                </a>
               </li>
             ))}
           </ul>
@@ -513,7 +628,8 @@ export default function RunPage() {
 
 /* ── progress ──────────────────────────────────────────────────────── */
 
-/** The stages, named as the person would describe them rather than as S1–S11. */
+/** The stages, named as the person would describe them rather than as S1–S11.
+ *  The key order is the pipeline order, and `Progress` relies on that. */
 const STAGE_WORDS: Record<string, string> = {
   extract: "reading the posting",
   job_brief: "working out what the role wants",
@@ -530,26 +646,63 @@ const STAGE_WORDS: Record<string, string> = {
   sent_eml: "producing the message",
 };
 
+const STAGE_ORDER = Object.keys(STAGE_WORDS);
+
+/**
+ * What it is doing, and what it has already done.
+ *
+ * A named stage rather than a percentage. A run has thirteen recorded stages of
+ * genuinely uneven length, so a progress bar would have to lie about position to
+ * look smooth — and "checking every claim" tells a waiting person something a
+ * bar at 61% does not.
+ */
 function Progress({ run }: { run: RunDetail }) {
-  const done = run.checkpoints.map((c) => c.stage);
-  if (RUNNING.has(run.status)) {
+  const done = new Set(run.checkpoints.map((c) => c.stage));
+  const live = RUNNING.has(run.status);
+
+  if (!live) {
     return (
-      <div>
-        <p className="text-sm">
-          {STAGE_WORDS[run.stage] ?? run.stage ?? "starting"}…
-        </p>
-        <p className="mt-1 text-xs" style={{ color: "var(--ink-faint)" }}>
-          {done.length} stage{done.length === 1 ? "" : "s"} done. This takes a few
-          minutes; you can close the tab and come back.
-        </p>
-      </div>
+      <p className="text-xs text-ink-faint">
+        {done.size} stage{done.size === 1 ? "" : "s"} recorded
+        {run.created_at
+          ? ` · started ${run.created_at.slice(0, 16).replace("T", " ")}`
+          : ""}
+      </p>
     );
   }
+
   return (
-    <p className="text-xs" style={{ color: "var(--ink-faint)" }}>
-      {done.length} stage{done.length === 1 ? "" : "s"} recorded
-      {run.created_at ? ` · started ${run.created_at.slice(0, 16).replace("T", " ")}` : ""}
-    </p>
+    <div>
+      <div className="flex items-center gap-2.5">
+        <Spinner size={16} />
+        <p className="text-sm font-medium">
+          {STAGE_WORDS[run.stage] ?? run.stage ?? "starting"}…
+        </p>
+      </div>
+
+      {/* One segment per stage. Filled means the API recorded a checkpoint for
+          it, which is a fact rather than an estimate. */}
+      <div className="mt-3 flex gap-1" aria-hidden>
+        {STAGE_ORDER.map((stage) => (
+          <span
+            key={stage}
+            title={STAGE_WORDS[stage]}
+            className={`h-1.5 flex-1 rounded-full ${
+              done.has(stage)
+                ? "bg-accent"
+                : stage === run.stage
+                  ? "bg-accent/40"
+                  : "bg-line"
+            }`}
+          />
+        ))}
+      </div>
+
+      <p className="mt-2 text-xs text-ink-faint">
+        {done.size} of {STAGE_ORDER.length} stages done. This takes a few
+        minutes; you can close the tab and come back.
+      </p>
+    </div>
   );
 }
 
@@ -564,28 +717,55 @@ function Progress({ run }: { run: RunDetail }) {
 function Standing({
   standing,
 }: {
-  standing: { demonstrated?: string[]; declared_only?: string[]; not_found?: string[] };
+  standing: {
+    demonstrated?: string[];
+    declared_only?: string[];
+    not_found?: string[];
+  };
 }) {
-  const groups: [string, string[], string][] = [
-    ["Shown with evidence", standing.demonstrated ?? [], "var(--good)"],
-    ["Claimed, not shown", standing.declared_only ?? [], "var(--warn)"],
-    ["Not in your resume", standing.not_found ?? [], "var(--bad)"],
+  const groups = [
+    {
+      label: "Shown with evidence",
+      items: standing.demonstrated ?? [],
+      dot: "bg-good",
+      text: "text-good",
+    },
+    {
+      label: "Claimed, not shown",
+      items: standing.declared_only ?? [],
+      dot: "bg-warn",
+      text: "text-warn",
+    },
+    {
+      label: "Not in your resume",
+      items: standing.not_found ?? [],
+      dot: "bg-bad",
+      text: "text-bad",
+    },
   ];
-  if (groups.every(([, items]) => items.length === 0)) return null;
+  if (groups.every((g) => g.items.length === 0)) return null;
 
   return (
-    <Card title="Where you stand">
-      <div className="grid gap-4 sm:grid-cols-3">
-        {groups.map(([label, items, colour]) => (
-          <div key={label}>
-            <h3 className="text-xs font-semibold" style={{ color: colour }}>
-              {label} ({items.length})
+    <Card title="Where you stand" aside="three grades, no score">
+      <div className="grid gap-5 sm:grid-cols-3">
+        {groups.map((group) => (
+          <div key={group.label}>
+            <h3
+              className={`flex items-center gap-2 text-xs font-semibold ${group.text}`}
+            >
+              <span className={`size-1.5 rounded-full ${group.dot}`} />
+              {group.label}
+              <span className="text-ink-faint">({group.items.length})</span>
             </h3>
-            <ul className="mt-1 space-y-0.5 text-sm">
-              {items.length === 0 ? (
-                <li style={{ color: "var(--ink-faint)" }}>—</li>
+            <ul className="mt-2 space-y-1 text-sm">
+              {group.items.length === 0 ? (
+                <li className="text-ink-faint">—</li>
               ) : (
-                items.map((item, i) => <li key={i}>{item}</li>)
+                group.items.map((item, i) => (
+                  <li key={i} className="text-ink-soft">
+                    {item}
+                  </li>
+                ))
               )}
             </ul>
           </div>

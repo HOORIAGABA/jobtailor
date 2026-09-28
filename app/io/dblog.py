@@ -50,6 +50,18 @@ STAGE_COLUMNS: dict[str, str] = {
     "outreach": "outreach_json",
 }
 
+# A stage whose payload is split across columns: key in the payload -> column.
+# `validation` is the guard's verdict — the accepted operations and every
+# rejection with its reason — and the API serves the two lists separately.
+#
+# This mapping did not exist, so `validation` fell through to "checkpoint
+# only" and `accepted_json` / `rejected_json` were written by nothing but the
+# seed scripts. Every live run reported `accepted: 0, rejected: 0` on the gate
+# screen — the product's central claim, silently absent on the product path.
+SPLIT_STAGES: dict[str, dict[str, str]] = {
+    "validation": {"accepted": "accepted_json", "rejected": "rejected_json"},
+}
+
 MEDIA = {
     ".docx": "application/vnd.openxmlformats-officedocument."
              "wordprocessingml.document",
@@ -85,8 +97,8 @@ class DbRunLog(RunLog):
         with self._factory() as session:
             run = session.get(Run, self.run_id)
             if run is not None:
-                if column := STAGE_COLUMNS.get(stage):
-                    setattr(run, column, _unwrap(stage, payload))
+                for column, value in columns_for(stage, payload).items():
+                    setattr(run, column, value)
                 # The three-grade term standing is the most user-facing thing
                 # a run produces and it travels inside the evidence payload.
                 # Lifting it to its own column here keeps one producer — S2 —
@@ -217,6 +229,22 @@ def _jsonable(value: Any) -> Any:
     """
     from app.io.runlog import _default
     return json.loads(json.dumps(value, default=_default))
+
+
+def columns_for(stage: str, payload: Any) -> dict[str, Any]:
+    """Which `runs` columns a stage's payload lands in, and with what.
+
+    One function, because there are two writers of these columns — a live run
+    through `DbRunLog` and `scripts/seed.py` importing a folder — and a stage
+    that one of them stored and the other did not is how `validation` went
+    missing. Empty for a stage that is checkpoint-only.
+    """
+    if column := STAGE_COLUMNS.get(stage):
+        return {column: _unwrap(stage, payload)}
+    if (split := SPLIT_STAGES.get(stage)) and isinstance(payload, dict):
+        return {column: payload.get(key) for key, column in split.items()
+                if key in payload}
+    return {}
 
 
 def _unwrap(stage: str, payload: Any) -> Any:

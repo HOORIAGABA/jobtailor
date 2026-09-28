@@ -81,9 +81,19 @@ def _dotenv_database_url() -> str:
     if path is None or not path.is_file():
         return ""
     try:
-        text = path.read_text(encoding="utf-8")
+        raw_bytes = path.read_bytes()
     except OSError:                                        # unreadable is absent
         return ""
+    # `utf-8-sig` because Notepad writes a BOM, and a BOM in front of the
+    # first key makes `\ufeffDATABASE_URL` a different key. The fallback is
+    # for a file with an em dash in a comment saved as cp1252 — the value
+    # this function wants is ASCII, so no decoding can damage it, and a
+    # `UnicodeDecodeError` here was a crash at import time that named
+    # neither the file nor the fix.
+    try:
+        text = raw_bytes.decode("utf-8-sig")
+    except UnicodeDecodeError:
+        text = raw_bytes.decode("cp1252", errors="replace")
 
     for raw in text.splitlines():
         line = raw.strip()

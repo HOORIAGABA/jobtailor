@@ -80,6 +80,20 @@ def test_an_empty_or_malformed_token_never_verifies():
         assert not confirm.matches(SECRET, token, "r", "a@b.com", "S", "B")
 
 
+def test_a_token_with_a_non_ascii_character_is_false_not_a_crash():
+    """★ `hmac.compare_digest` raises `TypeError` when given two `str`s and one
+    contains a non-ASCII character. The token is client input, so a single
+    "é" in the signature part was a 500 on the send endpoint — the one place
+    a person, seeing an error, presses the button again."""
+    now = 1_700_000_000
+    good = confirm.issue(SECRET, "r", "a@b.com", "S", "B", now=now)
+    head, _, _ = good.rpartition(".")
+    for bad in (head + ".é" + "0" * 63, head + ".٣" * 64, "v1.٣٣.deadbeef",
+                "v1. 12\n.deadbeef", "v1.１２.deadbeef"):
+        assert confirm.matches(SECRET, bad, "r", "a@b.com", "S", "B",
+                               now=now) is False
+
+
 def test_the_stored_fingerprint_is_not_the_token():
     """A stored credential is one that can be replayed out of a database dump."""
     token = confirm.issue(SECRET, "r", "a@b.com", "S", "B")

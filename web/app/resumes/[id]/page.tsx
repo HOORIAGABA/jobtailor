@@ -30,9 +30,12 @@ import {
   Field,
   Loading,
   Muted,
+  Page,
+  PageHeader,
   Problem,
   Status,
 } from "@/components/ui";
+import { Arrow, Check } from "@/components/icons";
 
 export default function ResumePage() {
   const { id } = useParams<{ id: string }>();
@@ -63,10 +66,10 @@ export default function ResumePage() {
       // `revision` goes back with the edit. Two tabs editing the same parse
       // would otherwise silently lose one set of corrections, and the person who
       // lost them would have no way to know.
-      const updated = await api.put<ResumeDetail>(
-        `/api/resumes/${id}/draft`,
-        { raw: draft, revision: resume.revision },
-      );
+      const updated = await api.put<ResumeDetail>(`/api/resumes/${id}/draft`, {
+        raw: draft,
+        revision: resume.revision,
+      });
       setResume(updated);
       setDraft(updated.raw);
       setSaved(true);
@@ -104,47 +107,45 @@ export default function ResumePage() {
   }
 
   if (error && !resume) return <Problem error={error} onRetry={load} />;
-  if (!resume || !draft) return <Loading what="the parse" />;
+  if (!resume || !draft)
+    return (
+      <Card title="The parse">
+        <Loading what="the parse" rows={4} />
+      </Card>
+    );
 
   const locked = resume.status === "confirmed" || resume.status === "superseded";
 
   return (
-    <div className="space-y-6">
-      {error && <Problem error={error} onRetry={load} />}
-
-      <Card
+    <div className="space-y-6 pb-4">
+      <PageHeader
+        back={{ href: "/app", label: "Applications" }}
+        eyebrow={`v${resume.version} · revision ${resume.revision}`}
         title={resume.filename}
-        aside={
-          <span className="flex items-center gap-2">
-            v{resume.version} · revision {resume.revision}
-            <Status value={resume.status} />
-          </span>
-        }
-      >
-        <Muted>
-          This is what was read out of your file. Everything downstream cites
-          these lines, so it is worth two minutes now.
-        </Muted>
-      </Card>
+        lead="This is what was read out of your file. Everything downstream cites these lines, so it is worth two minutes now."
+        actions={<Status value={resume.status} />}
+      />
+
+      {error && <Problem error={error} onRetry={load} />}
 
       {resume.unplaced_lines.length > 0 && (
         <Card
+          tone="warn"
           title={`${resume.unplaced_lines.length} line${
             resume.unplaced_lines.length === 1 ? "" : "s"
           } did not make it`}
-          tone="warn"
+          aside="in your file, not in the parse"
         >
           <Muted>
             These appear in your file and not in the parse below. Add them to the
             right section, or ignore them if they were headers, page numbers or
             decoration.
           </Muted>
-          <ul className="mt-3 space-y-1">
+          <ul className="mt-3 space-y-1.5">
             {resume.unplaced_lines.map((line, i) => (
               <li
                 key={i}
-                className="rounded border px-2 py-1 font-mono text-xs"
-                style={{ borderColor: "var(--line)", background: "var(--ground)" }}
+                className="rounded-md border border-line bg-sunken px-2.5 py-1.5 font-mono text-xs break-words"
               >
                 {line}
               </li>
@@ -154,14 +155,17 @@ export default function ResumePage() {
       )}
 
       {resume.invented_lines.length > 0 && (
-        <Card title="Text that is not in your file" tone="bad">
+        <Card tone="bad" title="Text that is not in your file">
           <Muted>
             The parse produced these and your document does not contain them.
             Delete or correct them — a claim that is not yours must not travel.
           </Muted>
-          <ul className="mt-3 space-y-1">
+          <ul className="mt-3 space-y-1.5">
             {resume.invented_lines.map((line, i) => (
-              <li key={i} className="font-mono text-xs">
+              <li
+                key={i}
+                className="rounded-md border border-bad-line bg-bad-bg px-2.5 py-1.5 font-mono text-xs break-words"
+              >
                 {line}
               </li>
             ))}
@@ -170,10 +174,13 @@ export default function ResumePage() {
       )}
 
       {resume.structure_warnings.length > 0 && (
-        <Card title="Structure worth a look" tone="warn">
-          <ul className="space-y-1 text-sm">
+        <Card tone="warn" title="Structure worth a look">
+          <ul className="space-y-1.5 text-sm/6">
             {resume.structure_warnings.map((w, i) => (
-              <li key={i}>{w}</li>
+              <li key={i} className="flex gap-2.5">
+                <span className="mt-2 size-1.5 shrink-0 rounded-full bg-warn" />
+                <span className="text-ink-soft">{w}</span>
+              </li>
             ))}
           </ul>
         </Card>
@@ -214,11 +221,11 @@ export default function ResumePage() {
       </Card>
 
       {draft.sections.length === 0 ? (
-        <Card title="Sections" tone="bad">
+        <Card tone="bad" title="Sections">
           <Empty>
             No sections were found. That usually means the layout defeated the
-            extractor — try Ask again, or paste the text into a .txt and upload
-            that.
+            extractor — try &ldquo;Ask the model again&rdquo;, or paste the text
+            into a .txt and upload that.
           </Empty>
         </Card>
       ) : (
@@ -227,9 +234,9 @@ export default function ResumePage() {
             key={si}
             title={
               <input
-                className="w-full rounded border px-2 py-1 text-base font-semibold"
-                style={{ background: "var(--ground)", borderColor: "var(--line)" }}
+                className="w-full rounded-md border border-transparent bg-transparent px-1.5 py-1 -mx-1.5 text-sm font-semibold tracking-tight transition-colors hover:border-line hover:bg-ground focus:border-accent focus:bg-ground focus:outline-none"
                 value={section.heading}
+                aria-label="Section heading"
                 onChange={(e) => {
                   const sections = [...draft.sections];
                   sections[si] = { ...section, heading: e.target.value };
@@ -241,14 +248,13 @@ export default function ResumePage() {
               section.entries.length === 1 ? "y" : "ies"
             }`}
           >
-            <div className="space-y-4">
+            <div className="space-y-3">
               {section.entries.map((entry, ei) => (
                 <div
                   key={ei}
-                  className="rounded-md border p-3"
-                  style={{ borderColor: "var(--line)" }}
+                  className="rounded-lg border border-line-soft bg-sunken p-3"
                 >
-                  <div className="grid gap-2 sm:grid-cols-3">
+                  <div className="grid gap-3 sm:grid-cols-3">
                     <Field
                       label="Title"
                       value={entry.title}
@@ -277,7 +283,7 @@ export default function ResumePage() {
                       }}
                     />
                   </div>
-                  <div className="mt-2">
+                  <div className="mt-3">
                     <Field
                       label="Bullets — one per line"
                       value={entry.bullets.join("\n")}
@@ -300,39 +306,41 @@ export default function ResumePage() {
         ))
       )}
 
-      <div
-        className="sticky bottom-0 -mx-4 border-t px-4 py-3 sm:mx-0 sm:rounded-lg sm:border"
-        style={{ background: "var(--surface)", borderColor: "var(--line)" }}
-      >
+      {/* The actions follow you down the page. This screen is long by design —
+          it is the whole parse — and a confirm button at the bottom of a long
+          scroll is a confirm button people press without reaching. */}
+      <div className="sticky bottom-0 -mx-4 border-t border-line bg-surface/90 px-4 py-3 backdrop-blur-md sm:mx-0 sm:rounded-xl sm:border sm:shadow-float">
         {locked ? (
-          <div className="flex flex-wrap items-center gap-3">
-            <Muted>
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-2">
+            <Check size={16} className="shrink-0 text-good" />
+            <p className="min-w-0 flex-1 text-sm/6 text-ink-soft">
               Confirmed. The ids in this parse are frozen, which is what lets
               every later change cite a specific line.
-            </Muted>
-            <span className="ms-auto">
-              <Button kind="primary" href="/runs/new">
-                Tailor for a posting
-              </Button>
-            </span>
+            </p>
+            <Button kind="primary" href="/runs/new" icon={<Arrow size={15} />}>
+              Tailor for a posting
+            </Button>
           </div>
         ) : (
-          <div className="flex flex-wrap items-center gap-3">
-            <Button onClick={save} busy={busy === "save"}>
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <Button onClick={save} busy={busy === "save"} size="sm">
               Save corrections
             </Button>
-            <Button onClick={reparse} busy={busy === "reparse"}>
+            <Button onClick={reparse} busy={busy === "reparse"} size="sm">
               Ask the model again
             </Button>
-            <span className="text-xs" style={{ color: "var(--ink-faint)" }}>
-              {saved ? "Saved. " : ""}Saving costs nothing. Asking again spends
-              model calls.
+            <span className="min-w-0 flex-1 text-xs text-ink-faint">
+              {saved && <span className="text-good">Saved. </span>}
+              Saving costs nothing. Asking again spends model calls.
             </span>
-            <span className="ms-auto">
-              <Button kind="primary" onClick={confirm} busy={busy === "confirm"}>
-                This is right — confirm
-              </Button>
-            </span>
+            <Button
+              kind="primary"
+              onClick={confirm}
+              busy={busy === "confirm"}
+              icon={<Check size={15} />}
+            >
+              This is right — confirm
+            </Button>
           </div>
         )}
       </div>

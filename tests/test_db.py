@@ -472,3 +472,27 @@ def test_no_env_file_and_no_variable_is_the_local_sqlite_file(
     monkeypatch.delenv("DATABASE_URL", raising=False)
 
     assert db_session.database_url() == db_session.DEFAULT_URL
+
+
+def test_the_dotenv_fallback_survives_a_bom_and_cp1252(tmp_path, monkeypatch):
+    """Notepad writes a BOM; a comment with an em dash saved as cp1252 is not
+    UTF-8. Both used to be a crash at import time. The value wanted is ASCII,
+    so neither can damage it."""
+    from app.db import session as db_session
+
+    monkeypatch.delenv("DATABASE_URL", raising=False)
+    bom = tmp_path / "bom.env"
+    bom.write_bytes("﻿DATABASE_URL=postgresql://bom/db\n".encode("utf-8"))
+    monkeypatch.setattr(db_session, "ENV_FILE", bom)
+    assert db_session.database_url() == "postgresql+psycopg://bom/db"
+
+    legacy = tmp_path / "cp1252.env"
+    legacy.write_bytes("# the pooled endpoint — see DEPLOY.md\n"
+                       "DATABASE_URL=postgresql://legacy/db\n".encode("cp1252"))
+    monkeypatch.setattr(db_session, "ENV_FILE", legacy)
+    assert db_session.database_url() == "postgresql+psycopg://legacy/db"
+
+
+def test_settings_read_the_env_file_as_utf8_regardless_of_locale():
+    from app.config import Settings
+    assert Settings.model_config.get("env_file_encoding") == "utf-8"
