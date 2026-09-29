@@ -69,8 +69,9 @@ Then in the browser at `http://localhost:3000/app`:
    number), 2 gaps, 1 question, three grades and no score.
 5. **Approve**. The token binds your approval to this exact text.
 6. **Produce the email**. Console backend: the `.eml` is written, nothing is
-   sent. Download it and open it in Outlook to show it is a real message with
-   both files attached.
+   sent. Download it and open it in Outlook to show it is a real message: it
+   opens "Dear Hiring Team,", is signed with your name, and carries one
+   attachment — the tailored résumé as `<Your_Name>_<Role>.pdf`.
 
 **The cache.** Parses and briefs are cached on content in `.cache\`. Uploading
 the same file twice costs no model call — good for a second take. To force a
@@ -173,7 +174,9 @@ ready` and `identity: Google sign-in`.
    incremental consent — the app never asked for it at sign-in.
 4. **Send it.** The audit row is written before Gmail is called. The screen
    turns to *Sent* with Gmail's message id, and the email is in your Sent
-   folder with the `.docx` and `.pdf` attached.
+   folder with the tailored résumé attached as `<Your_Name>_<Role>.pdf`.
+   (The `.docx` stays in the run's Files list for you — one attachment reads
+   better in a recruiter's inbox than two copies of the same résumé.)
 5. Press **Send it** again if you like: `409 already sent at …`. Once.
 
 Send it to yourself. A recruiter address in a recording is a recruiter

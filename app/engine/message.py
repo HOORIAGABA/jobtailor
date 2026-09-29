@@ -54,6 +54,79 @@ _VAGUE = ("your company", "your organisation", "your organization",
           "the company", "insert ", "name of company")
 
 
+# ── the frame: greeting and sign-off ─────────────────────────────────
+#
+# The greeting and the sign-off are the same on every message, so they are not
+# the model's to write. A 3B model asked for "a professional greeting" produces
+# "Hello,", "Hi there!", "Dear Sir/Madam," and "Hey team" across four runs —
+# and signs with an initial, a full name, or nothing. Written in code they are
+# identical every time, and the model spends its words on the part that has to
+# be specific.
+#
+# `core_of` removes whatever greeting and sign-off the model wrote anyway, so
+# the frame is applied once however obedient the model was, and `letter` is
+# idempotent — re-framing a framed message changes nothing.
+
+GREETING = "Dear Hiring Team,"
+VALEDICTION = "Kind regards,"
+
+_GREETING_LINE = re.compile(
+    r"^\s*(?:dear|hello|hi|hey|greetings|good\s+(?:morning|afternoon|day)|"
+    r"to\s+whom)\b[^\n]{0,60}$",
+    re.IGNORECASE,
+)
+_VALEDICTION_LINE = re.compile(
+    r"^\s*(?:(?:kind|best|warm|warmest)\s+regards|regards|best(?:\s+wishes)?|"
+    r"thanks|thank\s+you|many\s+thanks|sincerely|yours\s+(?:sincerely|"
+    r"faithfully|truly)|cheers|all\s+the\s+best|respectfully)[,.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
+def _is_signature(line: str, name: str) -> bool:
+    """The candidate's name on its own line — `Priya Raman`, `Priya`,
+    `P. Raman` — and nothing else on it."""
+    words = line.strip().lower().replace(".", " ").replace(",", " ").split()
+    parts = (name or "").strip().lower().replace(".", " ").split()
+    if not words or not parts or len(words) > 4:
+        return False
+    initials = {p[0] for p in parts}
+    return all(w in parts or (len(w) == 1 and w in initials) for w in words)
+
+
+def core_of(body: str, name: str = "") -> str:
+    """The paragraphs between the greeting and the sign-off."""
+    lines = (body or "").strip().splitlines()
+    while lines and not lines[0].strip():
+        lines.pop(0)
+    if lines and _GREETING_LINE.match(lines[0]):
+        lines.pop(0)
+    while lines:
+        last = lines[-1]
+        if (not last.strip() or _VALEDICTION_LINE.match(last)
+                or _is_signature(last, name)):
+            lines.pop()
+            continue
+        break
+    return "\n".join(lines).strip()
+
+
+def letter(body: str, name: str = "") -> str:
+    """`Dear Hiring Team,` / the paragraphs / `Kind regards,` and the name."""
+    core = core_of(body, name)
+    signature = f"{VALEDICTION}\n{name.strip()}" if (name or "").strip() \
+        else VALEDICTION
+    return f"{GREETING}\n\n{core}\n\n{signature}" if core else ""
+
+
+_NOT_CLAIMS = frozenset({
+    "pdf", "cv", "resume", "résumé", "linkedin", "github",
+    "monday", "tuesday", "wednesday", "thursday", "friday", "saturday",
+    "sunday", "january", "february", "march", "april", "may", "june", "july",
+    "august", "september", "october", "november", "december",
+})
+
+
 def _as_written(text: str, terms: Iterable[str]) -> list[str]:
     """Each term in the casing the message actually used."""
     wanted = {t.lower() for t in terms}
@@ -122,7 +195,11 @@ def check(
     here, which would be a second producer of a fact S2 already owns.
     """
     problems: list[str] = []
-    body = message.body or ""
+    # Checked without the frame. The greeting and sign-off are written by
+    # `letter`, not by the model, so there is nothing in them to verify — and
+    # "Dear Hiring Team" would otherwise count toward the length and be read
+    # as two named things the resume does not support.
+    body = core_of(message.body or "", doc.contact.full_name)
     subject = message.subject or ""
 
     if not subject.strip():
@@ -166,6 +243,11 @@ def check(
     allowed |= {w.lower() for w in (brief.company or "").split()}
     allowed |= {w.lower() for w in (brief.role or "").split()}
     allowed |= {w.lower() for w in (doc.contact.full_name or "").split()}
+    # Words the system itself puts in play, and calendar words, are not
+    # capabilities. "My résumé is attached as a PDF" is a fact about the
+    # envelope — the send path attaches exactly one PDF — and "every Monday"
+    # names a day, not a skill. Both were reported as unsupported named things.
+    allowed |= _NOT_CLAIMS
     for term in brief.terms:
         allowed |= set(term.alias_forms())
     # `entities` lowercases, and a problem that reports `['kubernetes']` when

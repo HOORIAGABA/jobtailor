@@ -74,6 +74,8 @@ export default function RunPage() {
   const [token, setToken] = useState("");
   const [busy, setBusy] = useState<"" | "approve" | "reject" | "send">("");
   const [sent, setSent] = useState<SendResult | null>(null);
+  // What will be in the envelope, shown before the button that sends it.
+  const [attaching, setAttaching] = useState<string[] | null>(null);
 
   /**
    * ★ The editable fields are seeded exactly once, and this ref is what
@@ -155,6 +157,16 @@ export default function RunPage() {
         });
     }
   }, [id, run]);
+
+  // The attachment list comes from the same endpoint the send path uses, so
+  // the name shown here is the name the recruiter receives.
+  useEffect(() => {
+    if (run?.status !== "approved" || attaching !== null) return;
+    api
+      .get<{ attachments: string[] }>(`/api/runs/${id}/approved`)
+      .then((ready) => setAttaching(ready.attachments ?? []))
+      .catch(() => setAttaching([]));
+  }, [id, run?.status, attaching]);
 
   // Poll only while something is actually happening.
   useEffect(() => {
@@ -555,6 +567,12 @@ export default function RunPage() {
           <div className="mt-3 rounded-lg border border-line bg-sunken p-3 text-sm/6 whitespace-pre-wrap">
             {body}
           </div>
+          {attaching && attaching.length > 0 && (
+            <p className="mt-3 flex items-center gap-2 text-xs text-ink-soft">
+              <Doc size={14} className="text-ink-faint" />
+              Attached: <span className="font-mono">{attaching.join(", ")}</span>
+            </p>
+          )}
         </Card>
       )}
 

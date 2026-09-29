@@ -43,22 +43,29 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
+from pathlib import Path
 
 from sqlalchemy import update
 from sqlalchemy.orm import Session
 
 from app.db.models import Artifact, Message, Run, SendAudit, User
 from app.domain.errors import IllegalTransition, UserError
+from app.domain.models import ResumeDoc
 from app.domain.status import check_run_transition, may_send
 from app.engine.confirm import expires_at, issue, matches
 from app.io.mail.base import Attachment, OutgoingMessage, SendFailed, Sender
+from app.io.render import filename_for
 
 logger = logging.getLogger(__name__)
 
 # What goes in the envelope. `.docx` is the more reliably parsed of the two by
 # an ATS, and the PDF is what a human opens and sees identically everywhere —
 # both is the common shape of a real application and neither is redundant.
-ATTACH_STAGES = ("resume_docx", "resume_pdf")
+# The PDF only. A recruiter opens what arrives, and a PDF looks the same on
+# every machine; the .docx is kept on the run for the candidate (and for an ATS
+# upload form that asks for Word), but two copies of one résumé in an email
+# reads as not knowing which to send.
+ATTACH_STAGES = ("resume_pdf",)
 
 # The rendered message, kept on the run so it is downloadable and openable in a
 # mail client — the record of what was actually sent, not a reconstruction.
@@ -256,9 +263,28 @@ def _artifacts(session: Session, run: Run) -> dict[str, Artifact]:
 def _attachments(session: Session, run: Run) -> list[Attachment]:
     by_stage = _artifacts(session, run)
     return [
-        Attachment(filename=by_stage[stage].filename, data=by_stage[stage].blob)
+        Attachment(filename=_attachment_name(run, by_stage[stage]),
+                   data=by_stage[stage].blob)
         for stage in ATTACH_STAGES if stage in by_stage
     ]
+
+
+def _attachment_name(run: Run, artifact: Artifact) -> str:
+    """`Priya_Raman_Backend_Engineer.pdf`, not `resume_pdf.pdf`.
+
+    The artifact is stored under its stage name, which is right for the
+    database and wrong for a recruiter's downloads folder. Named from the
+    tailored résumé and the role when both exist; the stored name otherwise.
+    """
+    suffix = Path(artifact.filename).suffix.lstrip(".") or "pdf"
+    if not run.tailored_json:
+        return artifact.filename
+    try:
+        doc = ResumeDoc.model_validate(run.tailored_json)
+    except ValueError:
+        return artifact.filename
+    name = filename_for(doc, run.role or "", suffix)
+    return artifact.filename if name.startswith("resume.") else name
 
 
 def _claim(session: Session, run: Run, target: str) -> None:

@@ -216,23 +216,27 @@ WRITTEN = {"bullets": [
 ]}
 
 OUTREACH = {
-    "subject": "Backend Engineer — Priya Raman",
+    # The paragraphs only: `engine.message.letter` adds "Dear Hiring Team,"
+    # above and "Kind regards," with the name below, as it does on a live run.
+    # Every claim is a line on the résumé, said no bigger than it is there.
+    "subject": "Application: Backend Engineer — Priya Raman, Python and "
+               "PostgreSQL",
     "body": (
-        "Hello,\n\n"
-        "I am applying for the Backend Engineer role. Most of my day is "
-        "Python and PostgreSQL — I write the nightly loads behind our "
-        "reporting and I built the dashboard the team uses instead of a "
-        "spreadsheet. The FastAPI experience below is a side project "
-        "rather than production work, and I would rather say so than let it "
-        "read as more than it is.\n\n"
-        "I have not run anything on Kubernetes and I am two years short of "
-        "the four you ask for. If either is firm, I would rather know now "
-        "than take up your time.\n\n"
-        "The attached resume has the detail. Happy to talk if that is "
-        "useful.\n\n"
-        "Priya Raman"
+        "I am applying for the Backend Engineer role at Halverson Labs. My "
+        "day-to-day work is Python and PostgreSQL, which is where your "
+        "posting starts.\n\n"
+        "Two things on my résumé map directly to what you describe. I write "
+        "the nightly Python jobs that load our sales data into PostgreSQL, "
+        "and I built the reporting dashboard that replaced a spreadsheet the "
+        "team rebuilt by hand every Monday. I also built a small FastAPI "
+        "service backed by PostgreSQL, as a side project rather than "
+        "production work.\n\n"
+        "I have not yet run services on Kubernetes, and I have not claimed "
+        "it; I would welcome the chance to learn it on your platform.\n\n"
+        "Thank you for your time. My résumé is attached as a PDF, and I "
+        "would be glad to arrange a short call at your convenience."
     ),
-    "cites": ["exp.1.b.2", "prj.3.b.1"],
+    "cites": ["exp.1.b.1", "exp.1.b.2", "prj.3.b.1"],
 }
 
 ANSWERS = {"brief": BRIEF, "plan": PLAN, "written": WRITTEN,

@@ -323,6 +323,23 @@ said so; nothing else did.
 (`DEMO.md`, level A), which is also how F1 would have been found. CSS has no
 type checker; a screenshot is the test.
 
+### D13 · The greeting and sign-off are code; the email carries one PDF
+
+Every message opens `Dear Hiring Team,` and ends `Kind regards,` with the
+candidate's name. A 3B model asked for "a professional greeting" wrote
+"Hello,", "Hi there!" and "Dear Sir/Madam," across runs, and signed with an
+initial, a full name or nothing. So `engine.message.letter` writes the frame,
+`core_of` strips whatever frame the model added anyway, and the message rules
+check only the paragraphs between — the frame is ours, so there is nothing in
+it to verify. The model spends its words on the part that has to be specific.
+
+The envelope holds the PDF only, named `Priya_Raman_Backend_Engineer.pdf`
+rather than the stage name `resume_pdf.pdf`. The `.docx` stays on the run.
+
+Found alongside it: the message check reported "PDF" and "Monday" as named
+things the résumé does not support. Both are now allowed; neither is a
+capability.
+
 ---
 
 ## The pattern

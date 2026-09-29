@@ -200,13 +200,13 @@ names the fix for each one that is not.
 ## Tests
 
 ```bash
-pytest -q          # 1,019
+pytest -q          # 1,083
 lint-imports       # 3 contracts
 python -m scripts.eval
 python -m alembic check
 ```
 
-**1,019 tests, 5 eval cases, 3 architecture contracts — and none of them needs an
+**1,083 tests, 5 eval cases, 3 architecture contracts — and none of them needs an
 API key.** Roughly 13,300 lines of application code against 12,300 lines of tests.
 
 CI runs on **Ubuntu and Windows**. That matrix is not decoration: seven bugs in

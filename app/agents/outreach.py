@@ -33,7 +33,7 @@ from app.domain.models import (
 )
 from app.engine.contact import recruiter_candidates
 from app.engine.evidence import TermStanding, evidence_bullets
-from app.engine.message import MAX_BODY_WORDS, check
+from app.engine.message import MAX_BODY_WORDS, check, letter
 from app.io.llm import LLMClient
 
 logger = logging.getLogger(__name__)
@@ -48,13 +48,17 @@ class DraftOutreach(BaseModel):
     """Every field required. The fifth time this lesson landed is documented in
     `agents.job_brief`; the schema here starts where that one ended up."""
     subject: str = Field(
-        description="One line, under 90 characters. Name the role. No 'Re:', "
-                    "no 'Application' alone — say which role and who you are."
+        description="One line, under 90 characters, in the form "
+                    "'Application: <role> — <candidate name>, <the strongest "
+                    "matching skill or credential>'. No 'Re:', no emoji, no "
+                    "exclamation marks."
     )
     body: str = Field(
-        description=f"The message. Under {MAX_BODY_WORDS} words, plain text, "
-                    f"no markdown. Open with why this role, give two specific "
-                    f"pieces of evidence, close with a clear next step."
+        description=f"The paragraphs of the email ONLY — no greeting line and "
+                    f"no sign-off or name; both are added for you. Under "
+                    f"{MAX_BODY_WORDS} words, plain text, no markdown, three "
+                    f"or four short paragraphs as described in the system "
+                    f"message."
     )
     cites: list[str] = Field(
         description="The bullet ids behind the specific claims in the body, "
@@ -94,12 +98,32 @@ WHAT YOU MAY NOT DO
 - Do not flatter the company about things you were not told. You do not know
   what they are "doing in the space".
 
-TONE
-Match `register`. Write like a competent person who read the posting, not like
-an application form. Short sentences. No "I am writing to express my interest".
-No "I would be a great fit" without the reason attached.
+THE SHAPE — write only these paragraphs
+"Dear Hiring Team," is added above your text and "Kind regards," and the
+candidate's name below it. Do not write a greeting, a sign-off or a name.
 
-Close with one concrete next step, and nothing about salary or start dates.
+1. The opening, one or two sentences. Name the role and the company, and lead
+   with the single strongest reason this candidate fits — a concrete thing
+   they have built or done that the posting asks for. This line decides
+   whether the rest is read.
+2. The evidence, two or three sentences. Two specific achievements from the
+   lines you were given, each tied to a requirement in the posting. Name the
+   technology and what was built. Cite the line ids.
+3. Optional, one sentence. If a requirement in `must_not_claim` is central to
+   the role, acknowledge it plainly and professionally, and pair it with the
+   closest thing the candidate does have. Otherwise leave this out.
+4. The close, one or two sentences. Thank them for their time and ask for a
+   short conversation about the role. The resume is attached as a PDF; you
+   may refer to it.
+
+TONE
+Professional, confident and warm — a capable engineer writing to a hiring team,
+not a form letter and not a chat message. Active voice, first person, short
+sentences. `register` tells you how formal the posting is; stay at least
+business-formal.
+Never: "I am writing to express my interest", "I am passionate about",
+"I believe I would be a great fit", "to whom it may concern", apologies,
+exclamation marks, emoji, or anything about salary or start dates.
 
 Return only the JSON object."""
 
@@ -190,7 +214,10 @@ def draft_outreach(
         recipient_candidates=candidates or (
             [brief.recruiter_email] if brief.recruiter_email else []),
         subject=draft.subject.strip(),
-        body=draft.body.strip(),
+        # The greeting and the sign-off are the same on every message, so
+        # code writes them — see `engine.message.letter`. Whatever frame the
+        # model added despite being told not to is removed first.
+        body=letter(draft.body, doc.contact.full_name),
         cites=cites,
     )
     message.problems = check(message, doc, brief, standing, confirmed)

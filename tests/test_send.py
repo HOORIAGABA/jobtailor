@@ -255,7 +255,7 @@ def test_a_send_closes_the_run_and_records_who_carried_it(db):
         assert run.status == "sent"
         assert out["provider"] == "console"
         assert out["provider_message_id"].startswith("console-")
-        assert out["attachments"] == ["cv.docx", "cv.pdf"]
+        assert out["attachments"] == ["cv.pdf"]
         # The honest field: nothing left the machine, and the API says so.
         assert out["dispatched"] is False
 
@@ -265,16 +265,31 @@ def test_a_send_closes_the_run_and_records_who_carried_it(db):
         assert len(sender.sent) == 1
 
 
-def test_only_the_two_resume_renderings_go_in_the_envelope(db):
-    """`.docx` for the ATS and `.pdf` for the human — a deliberate list, not
-    every artifact the run happens to hold."""
+def test_only_the_pdf_goes_in_the_envelope(db):
+    """One file, the one that looks the same on every machine. The `.docx`
+    stays on the run for the candidate — a deliberate list, not every
+    artifact the run happens to hold."""
     with session_scope() as s:
         run = _approved(s)
         sender = ConsoleSender()
         _send(s, run, sender)
-        names = [p.get_filename() for p in _parse(sender.sent[0][1])
-                 .iter_attachments()]
-        assert names == ["cv.docx", "cv.pdf"]
+        parts = list(_parse(sender.sent[0][1]).iter_attachments())
+        assert [p.get_filename() for p in parts] == ["cv.pdf"]
+        assert parts[0].get_content_type() == "application/pdf"
+
+
+def test_the_attachment_is_named_for_the_candidate_and_the_role(db):
+    """`resume_pdf.pdf` is the stage name, which is right for the database
+    and wrong for a recruiter's downloads folder."""
+    with session_scope() as s:
+        run = _approved(s)
+        run.role = "AI Engineer"
+        run.tailored_json = {"contact": {"full_name": "A. Morgan"},
+                             "sections": []}
+        s.flush()
+        sender = ConsoleSender()
+        out = _send(s, run, sender)
+        assert out["attachments"] == ["A_Morgan_AI_Engineer.pdf"]
 
 
 def test_a_run_with_nothing_rendered_still_sends_the_letter(db):
@@ -489,8 +504,7 @@ def test_the_audit_stores_hashes_not_the_message(db):
         _send(s, run)
         rows = (s.query(models.SendAudit)
                 .order_by(models.SendAudit.attempted_at).all())
-        expected = _message(attachments=[Attachment("cv.docx", DOCX),
-                                         Attachment("cv.pdf", PDF)])
+        expected = _message(attachments=[Attachment("cv.pdf", PDF)])
         for row in rows:
             assert row.body_hash == expected.body_hash()
             assert row.subject_hash == expected.subject_hash()
@@ -522,7 +536,7 @@ def test_the_eml_preview_produces_the_message_without_sending_it(db):
         raw = service.preview_eml(s, run, user, recipient=TO, subject=SUBJECT,
                                   body=BODY)
         assert _parse(raw)["To"] == TO
-        assert len(list(_parse(raw).iter_attachments())) == 2
+        assert len(list(_parse(raw).iter_attachments())) == 1
         assert gate.message_of(s, run).sent_at is None
         assert run.status == "approved"
 
@@ -821,7 +835,7 @@ def test_the_approved_message_can_be_fetched_again_with_a_fresh_token(db):
         run = _approved(s)
         out = service.approved(s, run, secret=SECRET)
         assert out["recipient"] == TO
-        assert out["attachments"] == ["cv.docx", "cv.pdf"]
+        assert out["attachments"] == ["cv.pdf"]
 
         sender = ConsoleSender()
         result = _send(s, run, sender, confirm_token=out["confirm_token"])
