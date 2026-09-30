@@ -19,6 +19,12 @@ exists to make it checkable.
 
 ## What that looks like
 
+![JobTailor: upload, tailor, the honesty guard refusing an invented number, approve and send](docs/media/jobtailor-demo.gif)
+
+**[▶ Watch the full demo (2 min)](PASTE-THE-user-attachments-LINK-HERE)** — a fictional candidate's résumé
+tailored to a Junior AI Engineer posting on a local Llama 3.2 3B model: parse confirmation, the gate with every
+change and its source line, a refused fabrication, and a real Gmail send.
+
 A real refusal, from the `fabricated_number` eval case. The writer proposed a
 statistic; the validator could not find it in the source; the original line was
 kept and the refusal is shown rather than swallowed:
