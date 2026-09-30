@@ -6,15 +6,54 @@
 # which is one directory deeper than any of those, so the convention misses it
 # and this line is what points at it. `module.path:name` → `./app/api/main.py`.
 #
-# There is no `[project]` table on purpose. Adding one makes Vercel install from
-# `pyproject.toml` instead of `requirements.txt`, and the pinned set lives in
-# requirements.txt (STACK.md, D-17: one dependency list, no profile switch).
+# The `[project]` table below exists because Vercel needs it, and ONLY for that.
+# Vercel's Python builder (CLI 61+, which installs with uv) reads
+# `pyproject.toml` whenever the file exists and refuses to build without a
+# `[project]` table:  "error: No `project` table found in pyproject.toml".
+# This file previously had no such table, on the belief that its absence made
+# Vercel fall back to `requirements.txt`; the first real deploy disproved that.
+#
+# `requirements.txt` is still the one dependency list (STACK.md, D-17). The
+# `dependencies` array is a copy of it, and `tests/test_deploy.py` fails if the
+# two ever differ — so the set Vercel installs is the set CI tested.
 #
 # `tests/test_deploy.py` imports this value and checks that it resolves to a
 # real FastAPI instance, because a rename here fails at the first request of a
 # deployment and nowhere earlier.
 [tool.vercel]
 entrypoint = "app.api.main:app"
+
+[project]
+# Not a package: nothing is built or published from here. With no
+# `[build-system]`, uv treats this as a virtual project and only resolves it.
+name = "jobtailor"
+version = "0.1.0"
+requires-python = ">=3.11"
+# Generated from requirements.txt — edit that file, then copy the list here.
+# tests/test_deploy.py::test_pyproject_dependencies_match_requirements_txt
+dependencies = [
+    "pydantic==2.9.2",
+    "pydantic-settings==2.5.2",
+    "fastapi==0.115.0",
+    "uvicorn[standard]==0.30.6",
+    "python-multipart==0.0.9",
+    "langgraph==0.2.45",
+    "langgraph-checkpoint-postgres==2.0.2",
+    "langchain-core==0.3.15",
+    "google-generativeai==0.8.3",
+    "httpx==0.27.2",
+    "sqlalchemy==2.0.35",
+    "psycopg[binary]==3.2.3",
+    "alembic==1.13.3",
+    "pymupdf==1.28.2",
+    "python-docx==1.1.2",
+    "fpdf2==2.8.8",
+    "cryptography==43.0.1",
+    "langfuse==2.53.1",
+    "pytest==8.3.3",
+    "pytest-asyncio==0.24.0",
+    "import-linter==2.1",
+]
 
 [tool.pytest.ini_options]
 # `pythonpath` puts the project root on sys.path so `import app` works with a

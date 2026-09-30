@@ -86,15 +86,36 @@ def test_vercel_json_configures_the_resolved_entrypoint_file() -> None:
     assert 5 <= config["functions"][resolved]["maxDuration"] <= 60
 
 
-def test_there_is_no_project_table_in_pyproject() -> None:
-    """A `[project]` table changes how Vercel installs dependencies.
+def test_pyproject_dependencies_match_requirements_txt() -> None:
+    """The set Vercel installs is the set CI tested.
 
-    With one present it installs from `pyproject.toml`; the pinned set lives in
-    `requirements.txt` (STACK.md D-17, one dependency list and no profile
-    switch), so a `[project]` table added for some unrelated tooling reason would
-    quietly deploy a different set of packages than the one that was tested.
+    Vercel's builder (CLI 61+, uv) installs from `pyproject.toml` and refuses
+    to build without a `[project]` table. This test used to assert the table
+    was ABSENT, on the belief that absence made Vercel use requirements.txt —
+    the first real deploy failed with "No `project` table found", which is
+    how that belief was retired.
+
+    requirements.txt stays the one list (STACK.md D-17). The `dependencies`
+    array is a copy, and this is what keeps it a copy rather than a second
+    list that quietly diverges.
     """
-    assert "project" not in _pyproject()
+    import re
+
+    lines = (ROOT / "requirements.txt").read_text(encoding="utf-8").splitlines()
+    wanted = [re.sub(r"\s*#.*$", "", l).strip() for l in lines]
+    wanted = [l for l in wanted if l]
+    declared = _pyproject()["project"]["dependencies"]
+    assert declared == wanted, (
+        "pyproject.toml [project].dependencies must equal requirements.txt, "
+        "in order — edit requirements.txt, then copy the list")
+
+
+def test_the_project_table_builds_nothing() -> None:
+    """No `[build-system]`: uv treats the project as virtual and only resolves
+    it. A build backend here would try to package `app/`, `web/`, `tests/` and
+    `scripts/` as one distribution, and fail on the flat layout."""
+    assert "build-system" not in _pyproject()
+    assert _pyproject()["project"]["requires-python"] == ">=3.11"
 
 
 # ── one origin ────────────────────────────────────────────────────────────

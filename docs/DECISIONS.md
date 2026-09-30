@@ -365,6 +365,19 @@ claiming "AI engineer" was refused because the résumé never says "AI", and two
 accepted edits changed nothing (promoting an item already first). Both were
 fixed in the cases, not in the checks.
 
+### B19 · The deploy disproved a comment
+
+`pyproject.toml` said: no `[project]` table, so that Vercel installs from
+`requirements.txt`. A test asserted the table's absence. Vercel's current
+builder (uv) reads `pyproject.toml` whenever it exists and refused to build:
+`No project table found`. The comment described how the platform had behaved,
+not how it behaves.
+
+**Changed:** a `[project]` table whose dependencies are a copy of
+`requirements.txt`, and a test that fails if the copy drifts. Reproduced the
+builder's `uv lock` and `uv sync` under Python 3.12 locally, and booted the app
+from that environment, before pushing.
+
 ---
 
 ## The pattern

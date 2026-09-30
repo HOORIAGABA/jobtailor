@@ -150,6 +150,16 @@ of those, so `pyproject.toml` says where it is:
 entrypoint = "app.api.main:app"
 ```
 
+Vercel's builder installs with uv from `pyproject.toml`, which therefore has a
+`[project]` table whose `dependencies` are a copy of `requirements.txt`. The
+copy is enforced by `tests/test_deploy.py`, so edit `requirements.txt` and copy
+the list across; CI fails if they differ. Without the table the build stops at
+`error: No \`project\` table found in pyproject.toml`.
+
+On the **Import** screen Vercel may detect both apps in the repository and
+default the preset to **Services**. Choose **FastAPI** (or **Other**) instead —
+this project is the API only; the UI is the other project.
+
 `vercel.json` in the root caps the function at 30 seconds. Hobby's default and
 maximum are both 300, and 300 seconds of a stuck request is 300 seconds of
 provisioned memory you are waiting on; a read-only instance reads a row and
