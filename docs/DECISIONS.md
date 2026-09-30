@@ -340,6 +340,31 @@ Found alongside it: the message check reported "PDF" and "Monday" as named
 things the résumé does not support. Both are now allowed; neither is a
 capability.
 
+### B18 · Building the public demo found four bugs
+
+Five showcase cases, each refusing to seed unless it passed its own checks,
+found more than the preceding test suite had:
+
+- **The email check flagged the candidate's own employer.** "At Datum
+  Analytics I built…" was reported as naming something the résumé does not
+  support. Class C for the email checked the skill inventory only; it now
+  accepts any word the résumé itself contains.
+- **Ordinary sentence openers were "named things".** "Separately, …" and
+  "Serving a model …" were flagged. A sentence-initial word ending in *-ly* or
+  *-ing* is now grammar; a test pins that "Terraform ran it" is still a name.
+- **`demo_seed --reset` had never worked twice.** Runs were marked for deletion
+  but not flushed before their résumés were bulk-deleted, and the foreign key
+  refused it — on Postgres too.
+- **A read-only run page showed an error instead of the gate.** Preview
+  demanded `CONFIRM_TOKEN_SECRET` to sign a decision a read-only instance can
+  never accept. It now issues no token there, and the decision bar is replaced
+  by a note saying deciding is switched off.
+
+Two of the cases also failed for honest reasons worth keeping: a summary
+claiming "AI engineer" was refused because the résumé never says "AI", and two
+accepted edits changed nothing (promoting an item already first). Both were
+fixed in the cases, not in the checks.
+
 ---
 
 ## The pattern

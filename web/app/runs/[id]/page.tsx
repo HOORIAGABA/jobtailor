@@ -239,6 +239,19 @@ export default function RunPage() {
       />
 
       <Card>
+        {/* Said on the screen, not only in the README: a seeded run replays
+            recorded model answers, and a reader should not have to take the
+            rest of the page on trust to find that out. What is NOT replayed —
+            the matching, the refusals, the diff, the files — is the point. */}
+        {run.proof?.seeded === true && (
+          <p className="mb-3 rounded-lg border border-line bg-sunken px-3 py-2 text-xs/5 text-ink-soft">
+            <span className="font-semibold text-ink">Replayed demo.</span> The
+            model&apos;s answers were recorded; evidence matching, every
+            refusal, the diff, the email checks and the PDF were computed by
+            the real engine when this run was created. The candidate is
+            fictional.
+          </p>
+        )}
         <Progress run={run} />
         {(run.llm_calls > 0 || run.changes > 0) && (
           <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-4">
@@ -496,6 +509,17 @@ export default function RunPage() {
           {/* The decision. Sticky, because the gate is long and the point of it
               is that the person has scrolled through the whole thing — not that
               they hunted for a button at the end. */}
+          {caps?.read_only ? (
+            // A read-only instance refuses every decision with a 403. Showing
+            // buttons that can only fail would make the product look broken
+            // at exactly the screen it exists for, so it says what it is.
+            <div className="rounded-xl border border-line bg-sunken px-4 py-3 text-sm text-ink-soft">
+              <span className="font-semibold text-ink">This is where you approve or reject.</span>{" "}
+              On this public demo deciding and sending are switched off — run
+              JobTailor locally to approve an application and send it from
+              your own Gmail.
+            </div>
+          ) : (
           <div className="sticky bottom-0 -mx-4 border-t border-line bg-surface/90 px-4 py-3 backdrop-blur-md sm:mx-0 sm:rounded-xl sm:border sm:shadow-float">
             <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
               <Button
@@ -521,6 +545,7 @@ export default function RunPage() {
               </Button>
             </div>
           </div>
+          )}
         </>
       )}
 

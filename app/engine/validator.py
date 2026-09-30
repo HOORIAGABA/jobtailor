@@ -126,6 +126,13 @@ def numbers(text: str) -> set[str]:
 # longer than one sentence every sentence opener was read as a capability
 # claim. On a real draft that is a warning on every letter, which is how a
 # person learns to ignore the warnings — and the warnings are the product.
+# A sentence-initial word with one of these endings is an adverb or a gerund —
+# "Separately, …", "Serving a model …" — not a product name. The opener list
+# above cannot enumerate every such word, and the email check reported both as
+# unsupported "named things". Tool names do not end this way often enough to
+# matter, and the accepted false negative is the one described in `entities`.
+_GRAMMATICAL_ENDINGS = ("ly", "ing")
+
 _SENTENCE_OPENERS = frozenset({
     "happy", "glad", "pleased", "thanks", "thank", "please", "best", "regards",
     "hello", "hi", "dear", "if", "while", "although", "though", "since",
@@ -194,7 +201,8 @@ def entities(text: str) -> set[str]:
 
         if not tok[0].isupper():
             continue
-        if match.start() in starts and low in _SENTENCE_OPENERS:
+        if match.start() in starts and (
+                low in _SENTENCE_OPENERS or low.endswith(_GRAMMATICAL_ENDINGS)):
             continue                      # grammar, not a name
         if match.start() == 0:
             continue                      # the very first word, as before

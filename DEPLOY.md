@@ -282,27 +282,39 @@ discover which endpoints exist is a UI that guesses.
 
 ## 7. Seeding something to look at
 
-A read-only instance with an empty database shows empty lists. Point the seeder
-at Neon once, from your laptop:
+A read-only instance with an empty database shows empty lists. Seed the public
+demo from your laptop, once, pointed at Neon:
 
 ```powershell
 $env:DATABASE_URL = "postgresql+psycopg://…-pooler…/neondb?sslmode=require"
-python -m scripts.demo_seed
+python -m scripts.showcase --check     # runs and verifies all five; writes nothing
+python -m scripts.showcase             # verifies again, then replaces the demo account
+Remove-Item Env:DATABASE_URL
 ```
 
-It spends no model call, and the run it writes is a **real** one: a scripted
-client supplies the model's four answers, and the evidence matching, the
-validation, the application, the diff, the ATS pass and the render are all
-genuinely computed. So the refusal visible on the gate screen is the guarantee
-working, not a mock-up of it — the writer really does propose "cut processing time
-by 35%", that number really is absent from the resume, and S5 really does refuse
-it.
+Five applications from one fictional candidate (the Zara Ahmed of
+`demo/Zara_Ahmed_CV.pdf`) to five AI roles, each showing a different thing the
+product claims:
 
-**Use `demo_seed` and not `scripts.seed` or `scripts.ui_demo` for anything
-public.** Those two import from your local `runs\` folder, which holds your real
-CV: name, address, phone number, employment history. `demo_seed` invents a
-candidate. Nobody should have to choose between showing their work and publishing
-their personal data.
+| case | role | what the gate shows |
+| --- | --- | --- |
+| meridian | Junior AI Engineer | an invented "30%" accuracy figure refused (`fabricated_number`) |
+| sadaf | ML Engineer, NLP | "Fine-tuned" → "Led the fine-tuning" refused (`seniority_escalation`) |
+| qalam | LLM Application Developer | FAISS swapped for Pinecone, which she never used, refused (`unsupported_entity`) |
+| indus | Data Scientist | a tool list glued onto a bullet refused (`keyword_stuffing`) |
+| rahbar | Python Backend Engineer | nothing refused — the honest case |
+
+No model call is made. Each case replays the four answers a model gave, and the
+real `tailor()` computes everything else: evidence, the validator, apply, diff,
+the email checks and the PDF. **Nothing is seeded that fails its own check**:
+the exact expected refusal and no other, no number in the tailored résumé that
+is not on the original, every change attributed, an email with no problems,
+a clean render. `tests/test_showcase.py` runs the same checks in CI, and every
+run page carries a "Replayed demo" note saying all of this on screen.
+
+Seeding always replaces the demo account, so it is safe to run again after a
+change to the engine. `scripts.demo_seed` (a single data-analyst case) still
+exists for the tests; the public demo uses the showcase.
 
 ## 8. Running the full app locally
 

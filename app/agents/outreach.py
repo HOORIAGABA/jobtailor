@@ -83,7 +83,7 @@ reply.
 
 So: two concrete pieces of evidence, drawn from the lines you were given, each
 one connected to something the posting asked for. Name the technology. Name what
-was built. Cite the line id.
+was built. Put the line ids in `cites` — never in the body text.
 
 WHAT YOU MAY NOT DO
 - Do not claim anything in `must_not_claim`. Those are requirements this
@@ -108,7 +108,8 @@ candidate's name below it. Do not write a greeting, a sign-off or a name.
    whether the rest is read.
 2. The evidence, two or three sentences. Two specific achievements from the
    lines you were given, each tied to a requirement in the posting. Name the
-   technology and what was built. Cite the line ids.
+   technology and what was built. The ids go in `cites` only; the body
+   is read by a person and must not contain them.
 3. Optional, one sentence. If a requirement in `must_not_claim` is central to
    the role, acknowledge it plainly and professionally, and pair it with the
    closest thing the candidate does have. Otherwise leave this out.
@@ -124,6 +125,14 @@ business-formal.
 Never: "I am writing to express my interest", "I am passionate about",
 "I believe I would be a great fit", "to whom it may concern", apologies,
 exclamation marks, emoji, or anything about salary or start dates.
+
+EXAMPLE — a different candidate and role, to show the shape and tone only.
+Never copy its facts; every fact in your message comes from your own evidence.
+{
+  "subject": "Application: Data Analyst — Omar Sheikh, SQL and Power BI",
+  "body": "I am applying for the Data Analyst role at Harbourline Logistics. For the past year I have built the reporting your posting describes, in SQL and Power BI.\n\nAt my current team I rebuilt the weekly delivery report as a Power BI dashboard that operations now use instead of a spreadsheet, and I wrote the SQL that feeds it from our shipment database. I have not yet worked with dbt, which you list as a plus, though the transformations I maintain follow the same pattern.\n\nThank you for your time. My résumé is attached as a PDF, and I would welcome a short conversation about the role.",
+  "cites": ["exp.1.b.1", "exp.1.b.2"]
+}
 
 Return only the JSON object."""
 

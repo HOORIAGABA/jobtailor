@@ -66,7 +66,13 @@ def preview(session: Session, run: Run, secret: str) -> dict[str, Any]:
     # Issued once and read once. Issuing twice — for the token and again for
     # its expiry — would give two different expiry values whenever the clock
     # ticked between the calls.
-    token = issue(secret, run.id, recipient, subject, body)
+    #
+    # No secret means no token: a read-only instance shows the gate and can
+    # never accept a decision (every POST is refused before a handler runs),
+    # so it has nothing to sign. It used to refuse the whole preview instead,
+    # which left the public demo's run pages without their diff, refusals and
+    # email — the entire reason to open one.
+    token = issue(secret, run.id, recipient, subject, body) if secret else ""
 
     return {
         "run_id": run.id,
@@ -87,7 +93,7 @@ def preview(session: Session, run: Run, secret: str) -> dict[str, Any]:
         # So the screen can say "this preview expires in 1h 52m" rather than
         # discovering it as a refusal after someone has spent ten minutes
         # rewriting the letter.
-        "confirm_token_expires_at": expires_at(token),
+        "confirm_token_expires_at": expires_at(token) if token else None,
         "can_download": True,
         # Honest about what happens next: this instance may have no way to send.
         "will_send": True,

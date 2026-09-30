@@ -111,12 +111,72 @@ def core_of(body: str, name: str = "") -> str:
     return "\n".join(lines).strip()
 
 
+# A résumé line id the model pasted into the prose — `[exp.3.b.1]`,
+# `(exp.1.b.2, prj.3.b.1)`. Ids belong in `cites`, where the gate resolves them;
+# in the email they are noise a recruiter cannot read. A 3B model does this on
+# almost every run however the prompt is worded, so it is removed in code.
+_LINE_ID = r"(?:[a-z]{3}\.\d+(?:\.b\.\d+)?)"
+_INLINE_CITE = re.compile(
+    rf"\s*[\[\(]\s*(?:ids?:?\s*)?{_LINE_ID}(?:\s*[,;/]\s*{_LINE_ID})*\s*[\]\)]"
+)
+# "Dear Hiring Team, My work building…" — a greeting run into the first
+# sentence on one line, which `_GREETING_LINE` (a whole line) cannot see.
+_GREETING_PREFIX = re.compile(
+    r"^\s*(?:dear|hello|hi|hey|greetings)\b[^,\n.!]{0,40}[,!:]\s+",
+    re.IGNORECASE,
+)
+_TRAILING_VALEDICTION = re.compile(
+    r"\s+(?:thanks|many thanks|(?:kind|best|warm) regards|regards|best|sincerely)"
+    r"[,.!]?\s*$",
+    re.IGNORECASE,
+)
+_SENTENCE = re.compile(r"(?<=[.!?])\s+(?=[A-Z\"'])")
+_CLOSING = re.compile(
+    r"^(?:thank you|thanks|i would (?:appreciate|welcome|be glad|love)|"
+    r"i look forward|please (?:find|see)|my (?:résumé|resume|cv) is attached)",
+    re.IGNORECASE,
+)
+
+
+def tidy(core: str) -> str:
+    """The paragraphs, cleaned of what a small model reliably gets wrong.
+
+    Three repairs, all mechanical and none of them about content:
+    line ids pasted into the prose are removed; a greeting run into the first
+    sentence is removed; and a message returned as one unbroken block is split
+    into an opening, the body and the close — the shape the prompt asks for,
+    which a 3B model ignores about half the time.
+    """
+    text = _INLINE_CITE.sub("", core or "")
+    text = _GREETING_PREFIX.sub("", text, count=1)
+    text = _TRAILING_VALEDICTION.sub("", text)
+    text = re.sub(r"[ \t]+([.,;:])", r"\1", text)
+    text = re.sub(r"[ \t]{2,}", " ", text).strip()
+    if "\n\n" in text or not text:
+        return text
+    sentences = [s.strip() for s in _SENTENCE.split(text.replace("\n", " ")) if s.strip()]
+    if len(sentences) < 3:
+        return text
+    close_at = next((i for i, s in enumerate(sentences) if i > 0 and _CLOSING.match(s)),
+                    len(sentences))
+    opening, middle, closing = sentences[:1], sentences[1:close_at], sentences[close_at:]
+    return "\n\n".join(" ".join(part) for part in (opening, middle, closing) if part)
+
+
 def letter(body: str, name: str = "") -> str:
     """`Dear Hiring Team,` / the paragraphs / `Kind regards,` and the name."""
-    core = core_of(body, name)
+    core = tidy(core_of(body, name))
     signature = f"{VALEDICTION}\n{name.strip()}" if (name or "").strip() \
         else VALEDICTION
     return f"{GREETING}\n\n{core}\n\n{signature}" if core else ""
+
+
+def _resume_words(doc: ResumeDoc) -> set[str]:
+    parts = [doc.summary or "", doc.contact.full_name or ""]
+    for item in doc.all_items():
+        parts += [item.title or "", item.org or "", item.dates or ""]
+    parts += [bullet.text for bullet in doc.all_bullets()]
+    return {w.lower() for w in re.findall(r"[A-Za-z][A-Za-z0-9+#.]*", " ".join(parts))}
 
 
 _NOT_CLAIMS = frozenset({
@@ -248,6 +308,13 @@ def check(
     # envelope — the send path attaches exactly one PDF — and "every Monday"
     # names a day, not a skill. Both were reported as unsupported named things.
     allowed |= _NOT_CLAIMS
+    # Anything the résumé itself says is grounded, whatever its case: the
+    # employer ("Datum Analytics"), a word from a bullet ("PDFs", "Llama"), a
+    # course. The corpus above is the skill inventory, which is the right
+    # authority for *capabilities* but not for every proper noun a résumé
+    # contains — and a covering letter that names the candidate's own employer
+    # was being reported as claiming something unsupported.
+    allowed |= _resume_words(doc)
     for term in brief.terms:
         allowed |= set(term.alias_forms())
     # `entities` lowercases, and a problem that reports `['kubernetes']` when

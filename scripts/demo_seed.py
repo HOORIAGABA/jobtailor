@@ -306,6 +306,12 @@ def _remove_existing(session) -> None:
         session.query(models.OpFeedback).filter(
             models.OpFeedback.run_id == run.id).delete()
         session.delete(run)
+    # Flushed before the bulk delete below. `session.delete` only marks a row,
+    # and the factory runs with autoflush off, so without this the résumés
+    # were deleted while their runs still existed and the foreign key refused
+    # it — on SQLite and on Postgres. `--reset` had never worked on a second
+    # run; the showcase seeder, which always resets, found it.
+    session.flush()
     session.query(models.Resume).filter(
         models.Resume.user_id == user.id).delete()
     session.delete(user)

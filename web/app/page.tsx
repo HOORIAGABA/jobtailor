@@ -74,7 +74,7 @@ export default function Landing() {
           {[
             ["9", "edit operations the model may return", false],
             ["13", "rules that can refuse one", false],
-            ["1,083", "tests, on Linux and Windows", false],
+            ["1,121", "tests, on Linux and Windows", false],
             ["0", "scores, ratings or match percentages", true],
           ].map(([n, label, highlight]) => (
             <div key={label as string} className="py-5">

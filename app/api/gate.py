@@ -13,7 +13,7 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
@@ -57,13 +57,18 @@ def _secret() -> str:
 
 
 @router.get("/{run_id}/preview")
-def preview(run_id: str,
+def preview(run_id: str, request: Request,
             session: Session = Depends(get_session),
             user: User = Depends(current_user)) -> dict:
-    """The diff, the gaps, the draft — and the token that binds a decision."""
+    """The diff, the gaps, the draft — and the token that binds a decision.
+
+    A read-only instance gets the same page with no token: it can never
+    accept a decision, so it needs no secret to show one.
+    """
     run = owned_run(run_id, session, user)
+    read_only = bool(getattr(request.app.state, "read_only", False))
     try:
-        return service.preview(session, run, _secret())
+        return service.preview(session, run, "" if read_only else _secret())
     except IllegalTransition as exc:
         raise HTTPException(409, str(exc)) from exc
 
