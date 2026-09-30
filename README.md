@@ -8,7 +8,7 @@
 [Architecture](docs/ARCHITECTURE.md) · [Decisions and the bugs behind them](docs/DECISIONS.md) ·
 [Run it yourself](DEMO.md)
 
-![JobTailor: upload a résumé, tailor it to a posting, see every change with its source and every refused edit, approve, send](docs/media/jobtailor-demo.gif)
+![JobTailor demo recording](docs/media/jobtailor-demo.gif)
 
 Give it a job posting and your résumé. It studies the role, rewrites the résumé
 for it, drafts the recruiter email — and shows you every change, its reason, and
@@ -148,7 +148,7 @@ your résumé at all**. Specific, actionable, and not maximisable.
 | Hallucination in generation | Typed operations with citations; a deterministic validator with 13 reject codes decides each one | `app/engine/validator.py` |
 | Grounding the email | The same rules applied to prose: numbers from the résumé, names from the résumé or the posting, no claiming a requirement the résumé cannot show | `app/engine/message.py` |
 | What small models get wrong | Greeting, sign-off, inline citation ids and paragraphing are fixed in code rather than prompted for, because a 3B model ignores those instructions half the time | `engine.message.letter` |
-| Model routing | A small local model (Llama 3.2 3B on a 6 GB GPU, via Ollama) for high-volume parsing; the reasoning calls can go to a hosted model | `LLM_*` / `SMART_LLM_*` |
+| Model routing | Two model settings: one for high-volume parsing (for example a small local model through Ollama) and one for the reasoning calls (for example a hosted model) | `LLM_*` / `SMART_LLM_*` |
 | Cost control | Per-run call and token budgets that fail loudly; content-hash caching of parse and brief | `RunBudget`, `app/io/cache.py` |
 | Evaluation | Adversarial eval cases, including a negative one that must **not** be refused — false positives count as much as false negatives | `evals/`, `scripts/eval.py` |
 | Human in the loop | Two gates: confirm the parse, approve the exact email. Approval is an HMAC over the text | `app/pipeline/gate.py` |
@@ -225,7 +225,7 @@ grammar-constrained generation so the sampler cannot emit malformed JSON:
 ```
 LLM_PROVIDER=ollama
 LLM_BASE_URL=http://localhost:11434/v1
-LLM_MODEL=llama3.2:3b
+LLM_MODEL=llama3.1:8b
 ```
 
 On a 6 GB GPU, the two-model split in `.env.example` is the right configuration:
@@ -248,7 +248,7 @@ python -m alembic check
 ```
 
 **1,122 tests, 5 eval cases, 3 architecture contracts — and none of them needs an
-API key.** Roughly 13,300 lines of application code against 12,300 lines of tests.
+API key.** About 14,200 lines of application code and 13,300 lines of tests.
 
 CI runs on **Ubuntu and Windows**. That matrix is not decoration: seven bugs in
 this project were Windows-only and invisible on Linux, including a 15.6 ms clock
@@ -288,19 +288,15 @@ Ollama or any OpenAI-compatible provider · Gmail API (`gmail.send` only)
 
 ## What is not done
 
-Stated plainly, because a project that claims to be honest should be:
+Limits of what this repository demonstrates, stated so a reader does not have
+to find them:
 
-- **Nothing has been sent by Gmail against a live account.** The console backend
-  writes the real message and dispatches nothing.
-- **Tailoring quality is unmeasured.** The evals use a synthetic résumé, so they
-  pin "it will not invent a number", not "the tailored résumé is better".
-  Measuring that needs human judgement I have not collected.
-- **The rate limiter counts in-process**, and a serverless function scales by
-  adding processes. Harmless while the public instance is read-only and refuses
-  every mutating method; it must move into the database before that changes.
-- **Google OAuth is in Testing mode**, where refresh tokens expire after seven
-  days. That is Google's rule, but it means "connect Gmail" has to be repeated
-  weekly until the app is published.
-- **URL fetching is deliberately absent.** v1 shipped
-  `httpx.get(user_url, follow_redirects=True)`, which on a cloud host reaches the
-  instance metadata endpoint. It stays out until there is an SSRF guard.
+- **The public demo's model answers are recorded.** The five applications
+  replay stored model answers; everything after them is computed by the real
+  engine. Every run page says this.
+- **Google sign-in is configured in Testing mode**, where Google expires
+  refresh tokens after seven days, so "Connect Gmail" has to be repeated weekly
+  until the app is verified.
+- **`requirements.txt` lists `langgraph`, `langchain-core` and `langfuse`, and
+  nothing imports them.** They are left over from an earlier design; the
+  pipeline is plain Python.
