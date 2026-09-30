@@ -25,6 +25,28 @@ import { signInUrl } from "@/lib/api";
 import { Button, Card, Stamp, Tag } from "@/components/ui";
 import { Check, Cross } from "@/components/icons";
 
+/**
+ * On Vercel the site is the public, read-only demo: there is no Google client
+ * there on purpose, so "Sign in with Google" answered with a JSON error. The
+ * page is static, so the mode is decided at build time from Vercel's own
+ * `VERCEL=1`; `NEXT_PUBLIC_PUBLIC_DEMO=false` overrides it for a writable
+ * Vercel deployment, should one ever exist.
+ */
+const PUBLIC_DEMO =
+  (process.env.NEXT_PUBLIC_PUBLIC_DEMO ?? (process.env.VERCEL === "1" ? "true" : "false")) === "true";
+
+function PrimaryAction({ size }: { size?: "lg" }) {
+  return PUBLIC_DEMO ? (
+    <Button kind="primary" size={size} href="/app">
+      See five real applications
+    </Button>
+  ) : (
+    <Button kind="primary" size={size} href={signInUrl}>
+      Sign in with Google
+    </Button>
+  );
+}
+
 export default function Landing() {
   return (
     <>
@@ -47,17 +69,15 @@ export default function Landing() {
               that refused it.
             </p>
             <div className="mt-7 flex flex-wrap gap-3">
-              <Button kind="primary" size="lg" href={signInUrl}>
-                Sign in with Google
-              </Button>
-              <Button size="lg" href="/app">
-                Your applications
+              <PrimaryAction size="lg" />
+              <Button size="lg" href={PUBLIC_DEMO ? "https://github.com/HOORIAGABA/jobtailor" : "/app"}>
+                {PUBLIC_DEMO ? "Read the source" : "Your applications"}
               </Button>
             </div>
             <p className="mt-3.5 max-w-md font-serif text-sm/6 text-ink-faint">
-              Signing in asks for your name and email. Permission to send mail is
-              requested later, at the approval step, when there is something to
-              send.
+              {PUBLIC_DEMO
+                ? "This is a read-only demo: five applications from one fictional candidate, each tailored to a different AI role. Running it on your own résumé and sending from your Gmail happens locally."
+                : "Signing in asks for your name and email. Permission to send mail is requested later, at the approval step, when there is something to send."}
             </p>
           </div>
 
@@ -193,9 +213,7 @@ export default function Landing() {
         </div>
 
         <div className="mt-8 flex flex-wrap items-center gap-3">
-          <Button kind="primary" href={signInUrl}>
-            Sign in with Google
-          </Button>
+          <PrimaryAction />
           <Link
             href="https://github.com/HOORIAGABA/jobtailor"
             className="text-sm text-accent underline decoration-accent-line underline-offset-4 transition-colors hover:text-ink"

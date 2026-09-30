@@ -20,7 +20,7 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 
 import { ApiError, api, connectGmailUrl, signInUrl } from "@/lib/api";
-import type { Me } from "@/lib/types";
+import type { Capabilities, Me } from "@/lib/types";
 import { Logo, Mail, Moon, Sun } from "@/components/icons";
 
 const LINKS = [
@@ -31,7 +31,18 @@ const LINKS = [
 export function Nav() {
   const [me, setMe] = useState<Me | null>(null);
   const [checked, setChecked] = useState(false);
+  // On the public read-only instance there is no sign-in, no Gmail and no new
+  // run: every one of those buttons led to an error page. The API says which
+  // mode it is in, so the header asks rather than guessing from the hostname.
+  const [readOnly, setReadOnly] = useState(false);
   const path = usePathname();
+
+  useEffect(() => {
+    api
+      .get<Capabilities>("/api/capabilities")
+      .then((caps) => setReadOnly(caps.read_only === true))
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     api
@@ -62,7 +73,7 @@ export function Nav() {
         </Link>
 
         <nav className="hidden items-center gap-1 sm:flex">
-          {LINKS.map((link) => {
+          {LINKS.filter((l) => !(readOnly && l.href === "/runs/new")).map((link) => {
             const active = path === link.href || path.startsWith(`${link.href}/`);
             return (
               <Link
@@ -83,7 +94,11 @@ export function Nav() {
 
         <div className="ms-auto flex items-center gap-2">
           <ThemeToggle />
-          {!checked ? (
+          {readOnly ? (
+            <span className="rounded-full border border-line px-2.5 py-1 text-xs font-semibold text-ink-soft">
+              Public demo · read-only
+            </span>
+          ) : !checked ? (
             <div className="skeleton h-7 w-20 rounded-full" />
           ) : me ? (
             <>
