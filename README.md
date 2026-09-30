@@ -4,6 +4,12 @@
 
 **Résumé tailoring that can prove it didn't invent anything.**
 
+**▶ [Live demo (read-only)](https://jobtailor-h9cs.vercel.app)** ·
+[Architecture](docs/ARCHITECTURE.md) · [Decisions and the bugs behind them](docs/DECISIONS.md) ·
+[Run it yourself](DEMO.md)
+
+![JobTailor: upload a résumé, tailor it to a posting, see every change with its source and every refused edit, approve, send](docs/media/jobtailor-demo.gif)
+
 Give it a job posting and your résumé. It studies the role, rewrites the résumé
 for it, drafts the recruiter email — and shows you every change, its reason, and
 the line of your own résumé it came from. Nothing is sent until you have read the
@@ -44,6 +50,26 @@ fabricated_number
 
 A refusal you cannot see is a refusal you cannot check, so every one of them is
 rendered on the approval screen with the rule that produced it.
+
+### Five applications you can open right now
+
+The [live demo](https://jobtailor-h9cs.vercel.app/app) holds one fictional
+candidate's résumé tailored to five AI roles. Each shows a different thing the
+guard does:
+
+| Role | What the review screen shows |
+| --- | --- |
+| Junior AI Engineer | an invented "30%" accuracy figure refused — `fabricated_number` |
+| ML Engineer, NLP | "Fine-tuned" rewritten as "Led the fine-tuning", refused — `seniority_escalation` |
+| LLM Application Developer | FAISS swapped for Pinecone, a tool she never used, refused — `unsupported_entity` |
+| Data Scientist | a tool list glued onto a real bullet, refused — `keyword_stuffing` |
+| Python Backend Engineer | nothing refused: the honest case, where good edits go straight through |
+
+Each one also shows the gaps it left alone, the three-grade standing, the drafted
+email and the tailored PDF. The model's answers in these five are recorded and
+replayed; the matching, every refusal, the diff, the email checks and the PDF
+are computed by the real engine, and every page says so. `scripts/showcase.py`
+refuses to seed a case that fails its own checks, and CI runs the same checks.
 
 ---
 
@@ -113,6 +139,22 @@ your résumé at all**. Specific, actionable, and not maximisable.
 
 ---
 
+## The LLM engineering, specifically
+
+| Concern | How it is handled | Where |
+| --- | --- | --- |
+| Structured output | Every call has a Pydantic schema; the client sends it as `json_schema`, degrades to `json_object`, then to prompt-only, per provider | `app/io/llm.py` |
+| Hallucination in extraction | The parse is diffed against the extracted text: lines that were dropped, and text the model **added**, are both reported before anything is confirmed | `app/engine/parse_check.py` |
+| Hallucination in generation | Typed operations with citations; a deterministic validator with 13 reject codes decides each one | `app/engine/validator.py` |
+| Grounding the email | The same rules applied to prose: numbers from the résumé, names from the résumé or the posting, no claiming a requirement the résumé cannot show | `app/engine/message.py` |
+| What small models get wrong | Greeting, sign-off, inline citation ids and paragraphing are fixed in code rather than prompted for, because a 3B model ignores those instructions half the time | `engine.message.letter` |
+| Model routing | A small local model (Llama 3.2 3B on a 6 GB GPU, via Ollama) for high-volume parsing; the reasoning calls can go to a hosted model | `LLM_*` / `SMART_LLM_*` |
+| Cost control | Per-run call and token budgets that fail loudly; content-hash caching of parse and brief | `RunBudget`, `app/io/cache.py` |
+| Evaluation | Adversarial eval cases, including a negative one that must **not** be refused — false positives count as much as false negatives | `evals/`, `scripts/eval.py` |
+| Human in the loop | Two gates: confirm the parse, approve the exact email. Approval is an HMAC over the text | `app/pipeline/gate.py` |
+
+---
+
 ## Architecture
 
 ```
@@ -146,14 +188,13 @@ including the bugs that shaped it.
 
 ## Running it
 
-**Two commands, no GPU** — a seeded run you can click through immediately. The
-scripted client supplies the model's answers, but the matching, validation, diff
-and rendering are genuinely computed, so the refusal on the gate screen is the
-real guard refusing a real fabricated number.
+**Two commands, no GPU** — the five showcase applications, seeded into your own
+database. The model's answers are replayed; the matching, validation, diff and
+rendering are genuinely computed, so each refusal is the real guard refusing.
 
 ```bash
 python -m alembic upgrade head
-python -m scripts.demo_seed
+python -m scripts.showcase
 ```
 
 Then, in two terminals:
@@ -222,8 +263,9 @@ positives matter as much as false negatives.
 
 ## Deployment
 
-Two Vercel projects and a Neon Postgres, all free. The public instance is
-**read-only**: it serves runs that already happened and refuses to start new ones,
+**Live at <https://jobtailor-h9cs.vercel.app>.** Two Vercel projects (the
+Next.js UI and the FastAPI API) and a Neon Postgres, all free. The public
+instance is **read-only**: it serves runs that already happened and refuses to start new ones,
 because a run takes minutes, the model is on a laptop the internet cannot reach,
 and a hosted key would spend one free-tier quota per visitor.
 `GET /api/capabilities` reports the mode, so the UI hides what it cannot do rather
